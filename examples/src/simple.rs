@@ -1,7 +1,10 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use core::fmt::Debug;
 
-use manul::protocol::*;
+use crate::format;
+
+use manul::session::Format;
+use manul::{protocol::*, testing::Binary};
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
@@ -145,7 +148,10 @@ impl<Id: 'static + Debug + Clone + Ord + Send + Sync> FirstRound<Id> for Round1<
     }
 }
 
-impl<Id: 'static + Debug + Clone + Ord + Send + Sync> Round<Id> for Round1<Id> {
+impl<Id> Round<Id> for Round1<Id>
+where
+    Id: 'static + Debug + Clone + Ord + Send + Sync,
+{
     type Protocol = SimpleProtocol;
 
     fn id(&self) -> RoundId {
@@ -160,24 +166,18 @@ impl<Id: 'static + Debug + Clone + Ord + Send + Sync> Round<Id> for Round1<Id> {
         &self.context.other_ids
     }
 
-    fn make_echo_broadcast(
-        &self,
-        _rng: &mut impl CryptoRngCore,
-        serializer: &Serializer,
-    ) -> Option<Result<EchoBroadcast, LocalError>> {
+    fn make_echo_broadcast(&self, _rng: &mut impl CryptoRngCore) -> Option<Result<EchoBroadcast, LocalError>> {
         debug!("{:?}: making echo broadcast", self.context.id);
 
         let message = Round1Echo {
             my_position: self.context.ids_to_positions[&self.context.id],
         };
-
-        Some(EchoBroadcast::new(serializer, message))
+        Some(Binary::serialize(message).map(|bytes| EchoBroadcast::from_bytes(bytes)))
     }
 
     fn make_direct_message(
         &self,
         _rng: &mut impl CryptoRngCore,
-        serializer: &Serializer,
         destination: &Id,
     ) -> Result<(DirectMessage, Artifact), LocalError> {
         debug!("{:?}: making direct message for {:?}", self.context.id, destination);
@@ -186,7 +186,10 @@ impl<Id: 'static + Debug + Clone + Ord + Send + Sync> Round<Id> for Round1<Id> {
             my_position: self.context.ids_to_positions[&self.context.id],
             your_position: self.context.ids_to_positions[destination],
         };
-        let dm = DirectMessage::new(serializer, message)?;
+        let dm = {
+            let bytes = <format::Binary as Format>::serialize(message)?;
+            DirectMessage::from_bytes(bytes)
+        };
         let artifact = Artifact::empty();
         Ok((dm, artifact))
     }
@@ -254,7 +257,10 @@ pub(crate) struct Round2Message {
     pub(crate) your_position: u8,
 }
 
-impl<Id: 'static + Debug + Clone + Ord + Send + Sync> Round<Id> for Round2<Id> {
+impl<Id> Round<Id> for Round2<Id>
+where
+    Id: 'static + Debug + Clone + Ord + Send + Sync,
+{
     type Protocol = SimpleProtocol;
 
     fn id(&self) -> RoundId {
@@ -269,24 +275,18 @@ impl<Id: 'static + Debug + Clone + Ord + Send + Sync> Round<Id> for Round2<Id> {
         &self.context.other_ids
     }
 
-    fn make_echo_broadcast(
-        &self,
-        _rng: &mut impl CryptoRngCore,
-        serializer: &Serializer,
-    ) -> Option<Result<EchoBroadcast, LocalError>> {
+    fn make_echo_broadcast(&self, _rng: &mut impl CryptoRngCore) -> Option<Result<EchoBroadcast, LocalError>> {
         debug!("{:?}: making echo broadcast", self.context.id);
 
         let message = Round1Echo {
             my_position: self.context.ids_to_positions[&self.context.id],
         };
-
-        Some(EchoBroadcast::new(serializer, message))
+        Some(Binary::serialize(message).map(|bytes| EchoBroadcast::from_bytes(bytes)))
     }
 
     fn make_direct_message(
         &self,
         _rng: &mut impl CryptoRngCore,
-        serializer: &Serializer,
         destination: &Id,
     ) -> Result<(DirectMessage, Artifact), LocalError> {
         debug!("{:?}: making direct message for {:?}", self.context.id, destination);
@@ -295,7 +295,10 @@ impl<Id: 'static + Debug + Clone + Ord + Send + Sync> Round<Id> for Round2<Id> {
             my_position: self.context.ids_to_positions[&self.context.id],
             your_position: self.context.ids_to_positions[destination],
         };
-        let dm = DirectMessage::new(serializer, message)?;
+        let dm = {
+            let bytes = <format::Binary as Format>::serialize(message)?;
+            DirectMessage::from_bytes(bytes)
+        };
         let artifact = Artifact::empty();
         Ok((dm, artifact))
     }

@@ -9,7 +9,7 @@ use manul::{
         Artifact, DirectMessage, EchoBroadcast, FinalizeError, FinalizeOutcome, FirstRound, LocalError, Payload,
         Protocol, ProtocolError, ProtocolValidationError, ReceiveError, Round, RoundId,
     },
-    session::{signature::Keypair, Deserializer, Serializer, SessionId, SessionOutcome},
+    session::{signature::Keypair, Deserializer, Format, SessionId, SessionOutcome},
     testing::{run_sync, Binary, Signer, TestingSessionParams, Verifier},
 };
 use rand_core::{CryptoRngCore, OsRng};
@@ -97,13 +97,9 @@ impl<Id: 'static + Debug + Clone + Ord + Send + Sync> Round<Id> for EmptyRound<I
         &self.inputs.other_ids
     }
 
-    fn make_echo_broadcast(
-        &self,
-        _rng: &mut impl CryptoRngCore,
-        serializer: &Serializer,
-    ) -> Option<Result<EchoBroadcast, LocalError>> {
+    fn make_echo_broadcast(&self, _rng: &mut impl CryptoRngCore) -> Option<Result<EchoBroadcast, LocalError>> {
         if self.inputs.echo {
-            Some(EchoBroadcast::new(serializer, Round1EchoBroadcast))
+            Some(Binary::serialize(Round1EchoBroadcast).map(|bytes| EchoBroadcast::from_bytes(bytes)))
         } else {
             None
         }
@@ -112,10 +108,12 @@ impl<Id: 'static + Debug + Clone + Ord + Send + Sync> Round<Id> for EmptyRound<I
     fn make_direct_message(
         &self,
         _rng: &mut impl CryptoRngCore,
-        serializer: &Serializer,
         _destination: &Id,
     ) -> Result<(DirectMessage, Artifact), LocalError> {
-        let dm = DirectMessage::new(serializer, Round1DirectMessage)?;
+        let dm = {
+            let bytes = Binary::serialize(Round1DirectMessage)?;
+            DirectMessage::from_bytes(bytes)
+        };
         let artifact = Artifact::new(Round1Artifact);
         Ok((dm, artifact))
     }
@@ -128,10 +126,12 @@ impl<Id: 'static + Debug + Clone + Ord + Send + Sync> Round<Id> for EmptyRound<I
         echo_broadcast: Option<EchoBroadcast>,
         direct_message: DirectMessage,
     ) -> Result<Payload, ReceiveError<Id, Self::Protocol>> {
-        let _echo_broadcast = echo_broadcast
-            .map(|echo| echo.deserialize::<Round1EchoBroadcast>(deserializer))
-            .transpose()?;
-        let _direct_message = direct_message.deserialize::<Round1DirectMessage>(deserializer)?;
+        let _echo_broadcast = criterion::black_box(
+            echo_broadcast
+                .map(|echo| echo.deserialize::<Round1EchoBroadcast>(deserializer))
+                .transpose()?,
+        );
+        let _direct_message = criterion::black_box(direct_message.deserialize::<Round1DirectMessage>(deserializer)?);
         Ok(Payload::new(Round1Payload))
     }
 

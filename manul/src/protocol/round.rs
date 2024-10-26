@@ -215,9 +215,9 @@ pub trait ProtocolError: Debug + Clone + Send {
 pub struct DirectMessage(#[serde(with = "SliceLike::<Base64>")] Box<[u8]>);
 
 impl DirectMessage {
-    /// Creates a new serialized direct message.
-    pub fn new<T: 'static + Serialize>(serializer: &Serializer, message: T) -> Result<Self, LocalError> {
-        serializer.serialize(message).map(Self)
+    /// Creates a new direct message from serialized bytes.
+    pub fn from_bytes(bytes: Box<[u8]>) -> Self {
+        Self(bytes)
     }
 
     /// Returns `Ok(())` if the message cannot be deserialized into `T`.
@@ -250,9 +250,9 @@ impl DirectMessage {
 pub struct EchoBroadcast(#[serde(with = "SliceLike::<Base64>")] Box<[u8]>);
 
 impl EchoBroadcast {
-    /// Creates a new serialized echo broadcast.
-    pub fn new<T: 'static + Serialize>(serializer: &Serializer, message: T) -> Result<Self, LocalError> {
-        serializer.serialize(message).map(Self)
+    /// Creates a new echo broadcast from serialized bytes.
+    pub fn from_bytes(bytes: Box<[u8]>) -> Self {
+        Self(bytes)
     }
 
     /// Returns `Ok(())` if the message cannot be deserialized into `T`.
@@ -398,7 +398,6 @@ pub trait Round<Id>: 'static + Send + Sync {
     fn make_direct_message(
         &self,
         rng: &mut impl CryptoRngCore,
-        serializer: &Serializer,
         destination: &Id,
     ) -> Result<(DirectMessage, Artifact), LocalError>;
 
@@ -412,7 +411,6 @@ pub trait Round<Id>: 'static + Send + Sync {
     fn make_echo_broadcast(
         &self,
         #[allow(unused_variables)] rng: &mut impl CryptoRngCore,
-        #[allow(unused_variables)] serializer: &Serializer,
     ) -> Option<Result<EchoBroadcast, LocalError>> {
         None
     }

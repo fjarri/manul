@@ -5,7 +5,6 @@ use rand_core::CryptoRngCore;
 use crate::protocol::{
     Artifact, DirectMessage, EchoBroadcast, FinalizeError, FinalizeOutcome, LocalError, Payload, Round,
 };
-use crate::session::Serializer;
 
 /// A trait defining a wrapper around an existing type implementing [`Round`].
 pub trait RoundWrapper<Id>: 'static + Sized + Send + Sync {
@@ -29,19 +28,14 @@ pub trait RoundOverride<Id>: RoundWrapper<Id> {
     fn make_direct_message(
         &self,
         rng: &mut impl CryptoRngCore,
-        serializer: &Serializer,
         destination: &Id,
     ) -> Result<(DirectMessage, Artifact), LocalError> {
-        self.inner_round_ref().make_direct_message(rng, serializer, destination)
+        self.inner_round_ref().make_direct_message(rng, destination)
     }
 
     /// An override for [`Round::make_echo_broadcast`].
-    fn make_echo_broadcast(
-        &self,
-        rng: &mut impl CryptoRngCore,
-        serializer: &Serializer,
-    ) -> Option<Result<EchoBroadcast, LocalError>> {
-        self.inner_round_ref().make_echo_broadcast(rng, serializer)
+    fn make_echo_broadcast(&self, rng: &mut impl CryptoRngCore) -> Option<Result<EchoBroadcast, LocalError>> {
+        self.inner_round_ref().make_echo_broadcast(rng)
     }
 
     /// An override for [`Round::finalize`].
@@ -90,18 +84,16 @@ macro_rules! round_override {
             fn make_direct_message(
                 &self,
                 rng: &mut impl CryptoRngCore,
-                serializer: &$crate::session::Serializer,
                 destination: &Id,
             ) -> Result<($crate::protocol::DirectMessage, $crate::protocol::Artifact), $crate::protocol::LocalError> {
-                <Self as $crate::testing::RoundOverride<Id>>::make_direct_message(self, rng, serializer, destination)
+                <Self as $crate::testing::RoundOverride<Id>>::make_direct_message(self, rng, destination)
             }
 
             fn make_echo_broadcast(
                 &self,
                 rng: &mut impl CryptoRngCore,
-                serializer: &$crate::session::Serializer,
             ) -> Option<Result<$crate::protocol::EchoBroadcast, $crate::protocol::LocalError>> {
-                <Self as $crate::testing::RoundOverride<Id>>::make_echo_broadcast(self, rng, serializer)
+                <Self as $crate::testing::RoundOverride<Id>>::make_echo_broadcast(self, rng)
             }
 
             fn receive_message(

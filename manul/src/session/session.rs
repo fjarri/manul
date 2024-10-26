@@ -158,9 +158,9 @@ where
     ) -> Result<Self, LocalError> {
         let verifier = signer.verifying_key();
         let echo_message = round
-            .make_echo_broadcast(rng, &serializer)
+            .make_echo_broadcast(rng)
             .transpose()?
-            .map(|echo| SignedMessage::new::<SP>(rng, &signer, &serializer, &session_id, round.id(), echo))
+            .map(|echo| SignedMessage::new::<SP>(rng, &signer, &session_id, round.id(), echo))
             .transpose()?;
         let message_destinations = round.message_destinations().clone();
 
@@ -207,12 +207,11 @@ where
         rng: &mut impl CryptoRngCore,
         destination: &SP::Verifier,
     ) -> Result<(MessageBundle, ProcessedArtifact<SP>), LocalError> {
-        let (direct_message, artifact) = self.round.make_direct_message(rng, &self.serializer, destination)?;
+        let (direct_message, artifact) = self.round.make_direct_message(rng, destination)?;
 
         let bundle = MessageBundle::new::<SP>(
             rng,
             &self.signer,
-            &self.serializer,
             &self.session_id,
             self.round.id(),
             direct_message,

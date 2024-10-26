@@ -11,17 +11,15 @@ use super::{
     session::{SessionId, SessionParameters},
     LocalError,
 };
-use crate::protocol::{DeserializationError, Deserializer, DirectMessage, EchoBroadcast, RoundId, Serializer};
+use crate::protocol::{DeserializationError, Deserializer, DirectMessage, EchoBroadcast, RoundId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SerializedSignature(#[serde(with = "SliceLike::<Hex>")] Box<[u8]>);
 
 impl SerializedSignature {
-    pub fn new<SP>(serializer: &Serializer, signature: SP::Signature) -> Result<Self, LocalError>
-    where
-        SP: SessionParameters,
-    {
-        serializer.serialize(signature).map(Self)
+    /// TODO docs and also check why the lint is off
+    pub fn from_bytes(bytes: Box<[u8]>) -> Self {
+        Self(bytes)
     }
 
     pub fn deserialize<SP>(&self, deserializer: &Deserializer) -> Result<SP::Signature, DeserializationError>
@@ -83,7 +81,6 @@ where
     pub fn new<SP>(
         rng: &mut impl CryptoRngCore,
         signer: &SP::Signer,
-        serializer: &Serializer,
         session_id: &SessionId,
         round_id: RoundId,
         message: M,
@@ -98,8 +95,9 @@ where
         let signature = signer
             .try_sign_digest_with_rng(rng, digest)
             .map_err(|err| LocalError::new(format!("Failed to sign: {:?}", err)))?;
+        let signature = SerializedSignature::from_bytes(SP::Format::serialize(&signature)?);
         Ok(Self {
-            signature: SerializedSignature::new::<SP>(serializer, signature)?,
+            signature,
             message_with_metadata,
         })
     }
@@ -174,7 +172,6 @@ impl MessageBundle {
     pub(crate) fn new<SP>(
         rng: &mut impl CryptoRngCore,
         signer: &SP::Signer,
-        serializer: &Serializer,
         session_id: &SessionId,
         round_id: RoundId,
         direct_message: DirectMessage,
@@ -183,7 +180,7 @@ impl MessageBundle {
     where
         SP: SessionParameters,
     {
-        let direct_message = SignedMessage::new::<SP>(rng, signer, serializer, session_id, round_id, direct_message)?;
+        let direct_message = SignedMessage::new::<SP>(rng, signer, session_id, round_id, direct_message)?;
         Ok(Self {
             direct_message,
             echo_broadcast,

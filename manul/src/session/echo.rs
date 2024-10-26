@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use super::{
+    format::Format,
     message::{MessageVerificationError, SignedMessage},
     session::SessionParameters,
     LocalError,
@@ -18,7 +19,7 @@ use super::{
 use crate::{
     protocol::{
         Artifact, Deserializer, DirectMessage, EchoBroadcast, FinalizeError, FinalizeOutcome, ObjectSafeRound, Payload,
-        Protocol, ReceiveError, Round, RoundId, Serializer,
+        Protocol, ReceiveError, Round, RoundId,
     },
     utils::SerializableMap,
 };
@@ -101,7 +102,6 @@ where
     fn make_direct_message(
         &self,
         _rng: &mut impl CryptoRngCore,
-        serializer: &Serializer,
         destination: &SP::Verifier,
     ) -> Result<(DirectMessage, Artifact), LocalError> {
         debug!("{:?}: making echo round message for {:?}", self.verifier, destination);
@@ -118,7 +118,10 @@ where
         let message = EchoRoundMessage::<SP> {
             echo_messages: echo_messages.into(),
         };
-        let dm = DirectMessage::new(serializer, message)?;
+        let dm = {
+            let bytes: Box<[u8]> = SP::Format::serialize(message)?;
+            DirectMessage::from_bytes(bytes)
+        };
         Ok((dm, Artifact::empty()))
     }
 

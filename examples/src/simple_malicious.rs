@@ -5,7 +5,7 @@ use manul::{
     protocol::{
         Artifact, DirectMessage, FinalizeError, FinalizeOutcome, FirstRound, LocalError, Payload, Round, SessionId,
     },
-    session::{signature::Keypair, Serializer},
+    session::{signature::Keypair, Format},
     testing::{round_override, run_sync, RoundOverride, RoundWrapper, Signer, TestingSessionParams, Verifier},
 };
 use rand_core::{CryptoRngCore, OsRng};
@@ -64,21 +64,23 @@ impl<Id: 'static + Debug + Clone + Ord + Send + Sync> RoundOverride<Id> for Mali
     fn make_direct_message(
         &self,
         rng: &mut impl CryptoRngCore,
-        serializer: &Serializer,
         destination: &Id,
     ) -> Result<(DirectMessage, Artifact), LocalError> {
         if matches!(self.behavior, Behavior::SerializedGarbage) {
-            let dm = DirectMessage::new(serializer, [99u8]).unwrap();
+            let dm = DirectMessage::from_bytes(Box::new([99u8]));
             Ok((dm, Artifact::empty()))
         } else if matches!(self.behavior, Behavior::AttributableFailure) {
             let message = Round1Message {
                 my_position: self.round.context.ids_to_positions[&self.round.context.id],
                 your_position: self.round.context.ids_to_positions[&self.round.context.id],
             };
-            let dm = DirectMessage::new(serializer, message)?;
+            let dm = {
+                let bytes = <Binary as Format>::serialize(message)?;
+                DirectMessage::from_bytes(bytes)
+            };
             Ok((dm, Artifact::empty()))
         } else {
-            self.inner_round_ref().make_direct_message(rng, serializer, destination)
+            self.inner_round_ref().make_direct_message(rng, destination)
         }
     }
 
@@ -128,7 +130,6 @@ impl<Id: 'static + Debug + Clone + Ord + Send + Sync> RoundOverride<Id> for Mali
     fn make_direct_message(
         &self,
         rng: &mut impl CryptoRngCore,
-        serializer: &Serializer,
         destination: &Id,
     ) -> Result<(DirectMessage, Artifact), LocalError> {
         if matches!(self.behavior, Behavior::AttributableFailureRound2) {
@@ -136,10 +137,13 @@ impl<Id: 'static + Debug + Clone + Ord + Send + Sync> RoundOverride<Id> for Mali
                 my_position: self.round.context.ids_to_positions[&self.round.context.id],
                 your_position: self.round.context.ids_to_positions[&self.round.context.id],
             };
-            let dm = DirectMessage::new(serializer, message)?;
+            let dm = {
+                let bytes = <Binary as Format>::serialize(message)?;
+                DirectMessage::from_bytes(bytes)
+            };
             Ok((dm, Artifact::empty()))
         } else {
-            self.inner_round_ref().make_direct_message(rng, serializer, destination)
+            self.inner_round_ref().make_direct_message(rng, destination)
         }
     }
 }
