@@ -1,10 +1,10 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use core::fmt::Debug;
 
-use crate::format;
+use crate::format::Binary;
 
+use manul::protocol::*;
 use manul::session::Format;
-use manul::{protocol::*, testing::Binary};
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
@@ -187,7 +187,7 @@ where
             your_position: self.context.ids_to_positions[destination],
         };
         let dm = {
-            let bytes = <format::Binary as Format>::serialize(message)?;
+            let bytes = <Binary as Format>::serialize(message)?;
             DirectMessage::from_bytes(bytes)
         };
         let artifact = Artifact::empty();
@@ -296,7 +296,7 @@ where
             your_position: self.context.ids_to_positions[destination],
         };
         let dm = {
-            let bytes = <format::Binary as Format>::serialize(message)?;
+            let bytes = <Binary as Format>::serialize(message)?;
             DirectMessage::from_bytes(bytes)
         };
         let artifact = Artifact::empty();

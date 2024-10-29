@@ -17,7 +17,7 @@ use super::{
     },
     object_safe::{ObjectSafeRound, ObjectSafeRoundWrapper},
 };
-use crate::session::{Deserializer, Serializer, SessionId};
+use crate::session::{Deserializer, SessionId};
 
 /// Possible successful outcomes of [`Round::finalize`].
 pub enum FinalizeOutcome<Id, P: Protocol> {
