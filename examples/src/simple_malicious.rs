@@ -1,11 +1,10 @@
 use alloc::collections::BTreeSet;
-use core::fmt::Debug;
 
 use manul::{
-    combinators::misbehave::{Misbehaving, MisbehavingEntryPoint},
-    dev::{run_sync, BinaryFormat, TestSessionParams, TestSigner},
+    combinators::misbehave::Misbehaving,
+    dev::{check_evidence_with_behavior, BinaryFormat, TestSessionParams, TestSigner, TestVerifier},
     protocol::{
-        Artifact, BoxedFormat, BoxedRound, DirectMessage, EntryPoint, LocalError, PartyId, ProtocolMessagePart,
+        Artifact, BoxedFormat, BoxedRound, DirectMessage, EchoBroadcast, EntryPoint, LocalError, ProtocolMessagePart,
     },
     signature::Keypair,
 };
@@ -14,174 +13,151 @@ use test_log::test;
 
 use crate::simple::{Round1, Round1Message, Round2, Round2Message, SimpleProtocolEntryPoint};
 
-#[derive(Debug, Clone, Copy)]
-enum Behavior {
-    SerializedGarbage,
-    AttributableFailure,
-    AttributableFailureRound2,
+type Id = TestVerifier;
+type EP = SimpleProtocolEntryPoint<Id>;
+type SP = TestSessionParams<BinaryFormat>;
+
+fn make_entry_points() -> Vec<(TestSigner, EP)> {
+    let signers = (0..3).map(TestSigner::new).collect::<Vec<_>>();
+    let all_ids = signers
+        .iter()
+        .map(|signer| signer.verifying_key())
+        .collect::<BTreeSet<_>>();
+
+    signers
+        .into_iter()
+        .map(|signer| (signer, SimpleProtocolEntryPoint::new(all_ids.clone())))
+        .collect()
 }
 
-struct MaliciousLogic;
+fn check_evidence<M>(expected_description: &str) -> Result<(), LocalError>
+where
+    M: Misbehaving<Id, (), EntryPoint = EP>,
+{
+    check_evidence_with_behavior::<SP, M, _>(&mut OsRng, make_entry_points(), &(), &(), expected_description)
+}
 
-impl<Id: PartyId> Misbehaving<Id, Behavior> for MaliciousLogic {
-    type EntryPoint = SimpleProtocolEntryPoint<Id>;
-
-    fn modify_direct_message(
-        _rng: &mut dyn CryptoRngCore,
-        round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-        behavior: &Behavior,
-        format: &BoxedFormat,
-        _destination: &Id,
-        direct_message: DirectMessage,
-        artifact: Option<Artifact>,
-    ) -> Result<(DirectMessage, Option<Artifact>), LocalError> {
-        let dm = if round.id() == 1 {
-            match behavior {
-                Behavior::SerializedGarbage => DirectMessage::new(format, [99u8])?,
-                Behavior::AttributableFailure => {
-                    let round1 = round.downcast_ref::<Round1<Id>>()?;
-                    let message = Round1Message {
-                        my_position: round1.context.ids_to_positions[&round1.context.id],
-                        your_position: round1.context.ids_to_positions[&round1.context.id],
-                    };
-                    DirectMessage::new(format, message)?
-                }
-                _ => direct_message,
-            }
-        } else if round.id() == 2 {
-            match behavior {
-                Behavior::AttributableFailureRound2 => {
-                    let round2 = round.downcast_ref::<Round2<Id>>()?;
-                    let message = Round2Message {
-                        my_position: round2.context.ids_to_positions[&round2.context.id],
-                        your_position: round2.context.ids_to_positions[&round2.context.id],
-                    };
-                    DirectMessage::new(format, message)?
-                }
-                _ => direct_message,
-            }
-        } else {
-            direct_message
-        };
-        Ok((dm, artifact))
+#[test]
+fn serialized_garbage() -> Result<(), LocalError> {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Part {
+        EchoBroadcast,
+        //NormalBroadcast,
+        //DirectMessage,
     }
-}
 
-type MaliciousEntryPoint<Id> = MisbehavingEntryPoint<Id, Behavior, MaliciousLogic>;
+    #[derive(Debug, Clone, Copy)]
+    struct Modify {
+        round: u8,
+        part: Part,
+    }
 
-#[test]
-fn serialized_garbage() {
-    let signers = (0..3).map(TestSigner::new).collect::<Vec<_>>();
-    let all_ids = signers
-        .iter()
-        .map(|signer| signer.verifying_key())
-        .collect::<BTreeSet<_>>();
+    impl Modify {
+        fn new(round: u8, part: Part) -> Self {
+            Self { round, part }
+        }
+    }
 
-    let entry_points = signers
-        .iter()
-        .enumerate()
-        .map(|(idx, signer)| {
-            let behavior = if idx == 0 {
-                Some(Behavior::SerializedGarbage)
-            } else {
-                None
-            };
+    struct Override;
 
-            let entry_point = MaliciousEntryPoint::new(SimpleProtocolEntryPoint::new(all_ids.clone()), behavior);
-            (*signer, entry_point)
-        })
-        .collect::<Vec<_>>();
+    impl Misbehaving<Id, Modify> for Override {
+        type EntryPoint = EP;
 
-    let mut reports = run_sync::<_, TestSessionParams<BinaryFormat>>(&mut OsRng, entry_points)
-        .unwrap()
-        .reports;
+        fn modify_echo_broadcast(
+            _rng: &mut dyn CryptoRngCore,
+            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
+            modify: &Modify,
+            format: &BoxedFormat,
+            echo_broadcast: EchoBroadcast,
+        ) -> Result<EchoBroadcast, LocalError> {
+            if round.id() != modify.round || modify.part != Part::EchoBroadcast {
+                return Ok(echo_broadcast);
+            }
 
-    let v0 = signers[0].verifying_key();
-    let v1 = signers[1].verifying_key();
-    let v2 = signers[2].verifying_key();
+            EchoBroadcast::new::<[u8; 0]>(format, [])
+        }
+    }
 
-    let _report0 = reports.remove(&v0).unwrap();
-    let report1 = reports.remove(&v1).unwrap();
-    let report2 = reports.remove(&v2).unwrap();
+    let entry_points = make_entry_points();
 
-    assert!(report1.provable_errors[&v0].verify(&()).is_ok());
-    assert!(report2.provable_errors[&v0].verify(&()).is_ok());
-}
-
-#[test]
-fn attributable_failure() {
-    let signers = (0..3).map(TestSigner::new).collect::<Vec<_>>();
-    let all_ids = signers
-        .iter()
-        .map(|signer| signer.verifying_key())
-        .collect::<BTreeSet<_>>();
-
-    let entry_points = signers
-        .iter()
-        .enumerate()
-        .map(|(idx, signer)| {
-            let behavior = if idx == 0 {
-                Some(Behavior::AttributableFailure)
-            } else {
-                None
-            };
-
-            let entry_point = MaliciousEntryPoint::new(SimpleProtocolEntryPoint::new(all_ids.clone()), behavior);
-            (*signer, entry_point)
-        })
-        .collect::<Vec<_>>();
-
-    let mut reports = run_sync::<_, TestSessionParams<BinaryFormat>>(&mut OsRng, entry_points)
-        .unwrap()
-        .reports;
-
-    let v0 = signers[0].verifying_key();
-    let v1 = signers[1].verifying_key();
-    let v2 = signers[2].verifying_key();
-
-    let _report0 = reports.remove(&v0).unwrap();
-    let report1 = reports.remove(&v1).unwrap();
-    let report2 = reports.remove(&v2).unwrap();
-
-    assert!(report1.provable_errors[&v0].verify(&()).is_ok());
-    assert!(report2.provable_errors[&v0].verify(&()).is_ok());
+    check_evidence_with_behavior::<SP, Override, _>(
+        &mut OsRng,
+        entry_points.clone(),
+        &Modify::new(1, Part::EchoBroadcast),
+        &(),
+        "Echo broadcast error: Deserialization error",
+    )?;
+    check_evidence_with_behavior::<SP, Override, _>(
+        &mut OsRng,
+        entry_points.clone(),
+        &Modify::new(2, Part::EchoBroadcast),
+        &(),
+        "Echo broadcast error: The payload was expected to be `None`, but contains a message",
+    )
 }
 
 #[test]
-fn attributable_failure_round2() {
-    let signers = (0..3).map(TestSigner::new).collect::<Vec<_>>();
-    let all_ids = signers
-        .iter()
-        .map(|signer| signer.verifying_key())
-        .collect::<BTreeSet<_>>();
+fn attributable_failure() -> Result<(), LocalError> {
+    struct Override;
 
-    let entry_points = signers
-        .iter()
-        .enumerate()
-        .map(|(idx, signer)| {
-            let behavior = if idx == 0 {
-                Some(Behavior::AttributableFailureRound2)
-            } else {
-                None
-            };
+    impl Misbehaving<Id, ()> for Override {
+        type EntryPoint = EP;
 
-            let entry_point = MaliciousEntryPoint::new(SimpleProtocolEntryPoint::new(all_ids.clone()), behavior);
-            (*signer, entry_point)
-        })
-        .collect::<Vec<_>>();
+        fn modify_direct_message(
+            _rng: &mut dyn CryptoRngCore,
+            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
+            _behavior: &(),
+            format: &BoxedFormat,
+            _destination: &Id,
+            direct_message: DirectMessage,
+            artifact: Option<Artifact>,
+        ) -> Result<(DirectMessage, Option<Artifact>), LocalError> {
+            if round.id() == 1 {
+                let round1 = round.downcast_ref::<Round1<Id>>()?;
+                let message = Round1Message {
+                    my_position: round1.context.ids_to_positions[&round1.context.id],
+                    your_position: round1.context.ids_to_positions[&round1.context.id],
+                };
+                let dm = DirectMessage::new(format, message)?;
+                return Ok((dm, artifact));
+            }
 
-    let mut reports = run_sync::<_, TestSessionParams<BinaryFormat>>(&mut OsRng, entry_points)
-        .unwrap()
-        .reports;
+            Ok((direct_message, artifact))
+        }
+    }
 
-    let v0 = signers[0].verifying_key();
-    let v1 = signers[1].verifying_key();
-    let v2 = signers[2].verifying_key();
+    check_evidence::<Override>("Protocol error: Invalid position in Round 1")
+}
 
-    let _report0 = reports.remove(&v0).unwrap();
-    let report1 = reports.remove(&v1).unwrap();
-    let report2 = reports.remove(&v2).unwrap();
+#[test]
+fn attributable_failure_round2() -> Result<(), LocalError> {
+    struct Override;
 
-    assert!(report1.provable_errors[&v0].verify(&()).is_ok());
-    assert!(report2.provable_errors[&v0].verify(&()).is_ok());
+    impl Misbehaving<Id, ()> for Override {
+        type EntryPoint = EP;
+
+        fn modify_direct_message(
+            _rng: &mut dyn CryptoRngCore,
+            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
+            _behavior: &(),
+            format: &BoxedFormat,
+            _destination: &Id,
+            direct_message: DirectMessage,
+            artifact: Option<Artifact>,
+        ) -> Result<(DirectMessage, Option<Artifact>), LocalError> {
+            if round.id() == 2 {
+                let round2 = round.downcast_ref::<Round2<Id>>()?;
+                let message = Round2Message {
+                    my_position: round2.context.ids_to_positions[&round2.context.id],
+                    your_position: round2.context.ids_to_positions[&round2.context.id],
+                };
+                let dm = DirectMessage::new(format, message)?;
+                return Ok((dm, artifact));
+            }
+
+            Ok((direct_message, artifact))
+        }
+    }
+
+    check_evidence::<Override>("Protocol error: Invalid position in Round 2")
 }
