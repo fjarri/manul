@@ -2,10 +2,11 @@ use alloc::collections::BTreeSet;
 
 use manul::{
     combinators::misbehave::Misbehaving,
-    dev::{check_evidence_with_behavior, BinaryFormat, TestSessionParams, TestSigner, TestVerifier},
-    protocol::{
-        Artifact, BoxedFormat, BoxedRound, DirectMessage, EchoBroadcast, EntryPoint, LocalError, ProtocolMessagePart,
+    dev::{
+        check_evidence_with_behavior, check_invalid_message_evidence, BinaryFormat, CheckPart, TestSessionParams,
+        TestSigner, TestVerifier,
     },
+    protocol::{Artifact, BoxedFormat, BoxedRound, DirectMessage, EntryPoint, LocalError, ProtocolMessagePart},
     signature::Keypair,
 };
 use rand_core::{CryptoRngCore, OsRng};
@@ -37,63 +38,29 @@ where
     check_evidence_with_behavior::<SP, M, _>(&mut OsRng, make_entry_points(), &(), &(), expected_description)
 }
 
-#[test]
-fn serialized_garbage() -> Result<(), LocalError> {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum Part {
-        EchoBroadcast,
-        //NormalBroadcast,
-        //DirectMessage,
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    struct Modify {
-        round: u8,
-        part: Part,
-    }
-
-    impl Modify {
-        fn new(round: u8, part: Part) -> Self {
-            Self { round, part }
-        }
-    }
-
-    struct Override;
-
-    impl Misbehaving<Id, Modify> for Override {
-        type EntryPoint = EP;
-
-        fn modify_echo_broadcast(
-            _rng: &mut dyn CryptoRngCore,
-            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-            modify: &Modify,
-            format: &BoxedFormat,
-            echo_broadcast: EchoBroadcast,
-        ) -> Result<EchoBroadcast, LocalError> {
-            if round.id() != modify.round || modify.part != Part::EchoBroadcast {
-                return Ok(echo_broadcast);
-            }
-
-            EchoBroadcast::new::<[u8; 0]>(format, [])
-        }
-    }
-
-    let entry_points = make_entry_points();
-
-    check_evidence_with_behavior::<SP, Override, _>(
+fn check_message(round_num: u8, part: CheckPart, expecting_a_message: bool) -> Result<(), LocalError> {
+    check_invalid_message_evidence::<SP, _>(
         &mut OsRng,
-        entry_points.clone(),
-        &Modify::new(1, Part::EchoBroadcast),
+        make_entry_points(),
+        round_num,
+        part,
         &(),
-        "Echo broadcast error: Deserialization error",
-    )?;
-    check_evidence_with_behavior::<SP, Override, _>(
-        &mut OsRng,
-        entry_points.clone(),
-        &Modify::new(2, Part::EchoBroadcast),
-        &(),
-        "Echo broadcast error: The payload was expected to be `None`, but contains a message",
+        expecting_a_message,
     )
+}
+
+#[test]
+fn invalid_messages_r1() {
+    check_message(1, CheckPart::EchoBroadcast, true).unwrap();
+    check_message(1, CheckPart::NormalBroadcast, true).unwrap();
+    check_message(1, CheckPart::DirectMessage, true).unwrap();
+}
+
+#[test]
+fn invalid_messages_r2() {
+    check_message(2, CheckPart::EchoBroadcast, false).unwrap();
+    check_message(2, CheckPart::NormalBroadcast, false).unwrap();
+    check_message(2, CheckPart::DirectMessage, true).unwrap();
 }
 
 #[test]

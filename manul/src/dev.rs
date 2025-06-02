@@ -16,7 +16,9 @@ mod wire_format;
 #[cfg(feature = "tokio")]
 pub mod tokio;
 
-pub use misbehave::{check_evidence_with_behavior, run_with_one_malicious_party};
+pub use misbehave::{
+    check_evidence_with_behavior, check_invalid_message_evidence, run_with_one_malicious_party, CheckPart,
+};
 pub use run_sync::{run_sync, ExecutionResult};
 pub use session_parameters::{TestHasher, TestSessionParams, TestSignature, TestSigner, TestVerifier};
 pub use wire_format::{BinaryFormat, HumanReadableFormat};

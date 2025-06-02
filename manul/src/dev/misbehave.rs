@@ -1,4 +1,5 @@
 use alloc::{collections::BTreeSet, format, vec::Vec};
+use core::{fmt::Debug, marker::PhantomData};
 
 use rand_core::CryptoRngCore;
 
@@ -6,7 +7,10 @@ use super::run_sync::run_sync;
 use crate::{
     combinators::misbehave::{Behavior, Misbehaving, MisbehavingEntryPoint},
     dev::ExecutionResult,
-    protocol::{EntryPoint, Protocol, ProtocolError},
+    protocol::{
+        Artifact, BoxedFormat, BoxedRound, DirectMessage, EchoBroadcast, EntryPoint, NormalBroadcast, PartyId,
+        Protocol, ProtocolError, ProtocolMessagePart,
+    },
     session::{LocalError, SessionParameters},
     signature::Keypair,
 };
@@ -83,7 +87,7 @@ where
     assert!(misbehaving_party_report.provable_errors.is_empty());
 
     for (id, report) in reports {
-        if report.provable_errors.len() == 0 {
+        if report.provable_errors.is_empty() {
             return Err(LocalError::new(format!(
                 "Node {id:?} did not report any provable errors"
             )));
@@ -92,8 +96,8 @@ where
         if report.provable_errors.len() > 1 {
             let errors = report
                 .provable_errors
-                .iter()
-                .map(|(_id, evidence)| evidence.description())
+                .values()
+                .map(|evidence| evidence.description())
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(LocalError::new(format!(
@@ -128,4 +132,125 @@ where
     }
 
     Ok(())
+}
+
+/// Indicates the part of the protocol message whose error handling will be checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckPart {
+    /// Echo broadcast part.
+    EchoBroadcast,
+    /// Normal broadcast part.
+    NormalBroadcast,
+    /// Direct message part.
+    DirectMessage,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ModifyPart {
+    round: u8,
+    part: CheckPart,
+}
+
+impl ModifyPart {
+    fn new(round: u8, part: CheckPart) -> Self {
+        Self { round, part }
+    }
+}
+
+struct InvalidMessageOverride<EP>(PhantomData<EP>);
+
+impl<Id: PartyId, EP> Misbehaving<Id, ModifyPart> for InvalidMessageOverride<EP>
+where
+    EP: 'static + Debug + EntryPoint<Id>,
+{
+    type EntryPoint = EP;
+
+    fn modify_echo_broadcast(
+        _rng: &mut dyn CryptoRngCore,
+        round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
+        modify: &ModifyPart,
+        format: &BoxedFormat,
+        echo_broadcast: EchoBroadcast,
+    ) -> Result<EchoBroadcast, LocalError> {
+        if round.id() != modify.round || modify.part != CheckPart::EchoBroadcast {
+            return Ok(echo_broadcast);
+        }
+
+        // This triggers an error both in the case where the part is not supposed to be present,
+        // and in the case where it is (because the deserialization fails).
+        EchoBroadcast::new::<[u8; 0]>(format, [])
+    }
+
+    fn modify_normal_broadcast(
+        _rng: &mut dyn CryptoRngCore,
+        round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
+        modify: &ModifyPart,
+        format: &BoxedFormat,
+        normal_broadcast: NormalBroadcast,
+    ) -> Result<NormalBroadcast, LocalError> {
+        if round.id() != modify.round || modify.part != CheckPart::NormalBroadcast {
+            return Ok(normal_broadcast);
+        }
+
+        // This triggers an error both in the case where the part is not supposed to be present,
+        // and in the case where it is (because the deserialization fails).
+        NormalBroadcast::new::<[u8; 0]>(format, [])
+    }
+
+    fn modify_direct_message(
+        _rng: &mut dyn CryptoRngCore,
+        round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
+        modify: &ModifyPart,
+        format: &BoxedFormat,
+        _destination: &Id,
+        direct_message: DirectMessage,
+        artifact: Option<Artifact>,
+    ) -> Result<(DirectMessage, Option<Artifact>), LocalError> {
+        if round.id() != modify.round || modify.part != CheckPart::DirectMessage {
+            return Ok((direct_message, artifact));
+        }
+
+        // This triggers an error both in the case where the part is not supposed to be present,
+        // and in the case where it is (because the deserialization fails).
+        let direct_message = DirectMessage::new::<[u8; 0]>(format, [])?;
+        Ok((direct_message, artifact))
+    }
+}
+
+/// Checks that generating and verifying evidence for an invalid message part works correctly.
+///
+/// Pass `expecting_a_message = true` if in the round `round_num` the part `part` is expected to exist,
+/// `false` otherwise.
+pub fn check_invalid_message_evidence<SP, EP>(
+    rng: &mut impl CryptoRngCore,
+    entry_points: Vec<(SP::Signer, EP)>,
+    round_num: u8,
+    part: CheckPart,
+    associated_data: &<<EP::Protocol as Protocol<SP::Verifier>>::ProtocolError as ProtocolError<SP::Verifier>>::AssociatedData,
+    expecting_a_message: bool,
+) -> Result<(), LocalError>
+where
+    EP: 'static + Debug + EntryPoint<SP::Verifier>,
+    SP: SessionParameters,
+{
+    let prefix = match part {
+        CheckPart::EchoBroadcast => "Echo broadcast",
+        CheckPart::NormalBroadcast => "Normal broadcast",
+        CheckPart::DirectMessage => "Direct message",
+    };
+    let error = if expecting_a_message {
+        "Deserialization error"
+    } else {
+        "The payload was expected to be `None`, but contains a message"
+    };
+
+    let expected_description = format!("{prefix} error: {error}");
+
+    check_evidence_with_behavior::<SP, InvalidMessageOverride<EP>, _>(
+        rng,
+        entry_points,
+        &ModifyPart::new(round_num, part),
+        associated_data,
+        &expected_description,
+    )
 }
