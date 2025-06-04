@@ -64,8 +64,8 @@ impl<Id> ProtocolError<Id> for SimpleProtocolError {
 
                 // Deserialize the echos
                 let _r1_echos = r1_echos_serialized
-                    .iter()
-                    .map(|(_id, echo)| echo.deserialize::<Round1Echo>(format))
+                    .values()
+                    .map(|echo| echo.deserialize::<Round1Echo>(format))
                     .collect::<Result<Vec<_>, _>>()?;
 
                 // Message contents would be checked here
