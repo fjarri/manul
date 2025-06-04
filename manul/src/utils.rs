@@ -4,4 +4,4 @@ mod serializable_map;
 mod traits;
 
 pub use serializable_map::SerializableMap;
-pub use traits::{MapValues, MapValuesRef, Without};
+pub use traits::{MapDowncast, MapValues, MapValuesRef, Without};

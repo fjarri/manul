@@ -8,7 +8,7 @@ use manul::{
         ProtocolError, ProtocolMessage, ProtocolMessagePart, ProtocolValidationError, ReceiveError,
         RequiredMessageParts, RequiredMessages, Round, RoundId, TransitionInfo,
     },
-    utils::Without,
+    utils::{MapDowncast, Without},
 };
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
@@ -281,12 +281,9 @@ impl<Id: PartyId> Round<Id> for Round1<Id> {
             payloads.keys().cloned().collect::<Vec<_>>()
         );
 
-        let typed_payloads = payloads
-            .into_values()
-            .map(|payload| payload.downcast::<Round1Payload>())
-            .collect::<Result<Vec<_>, _>>()?;
+        let typed_payloads = payloads.try_map_downcast::<Round1Payload>()?;
         let sum = self.context.ids_to_positions[&self.context.id]
-            + typed_payloads.iter().map(|payload| payload.x).sum::<u8>();
+            + typed_payloads.values().map(|payload| payload.x).sum::<u8>();
 
         let round2 = BoxedRound::new_dynamic(Round2 {
             round1_sum: sum,
@@ -369,12 +366,9 @@ impl<Id: PartyId> Round<Id> for Round2<Id> {
             payloads.keys().cloned().collect::<Vec<_>>()
         );
 
-        let typed_payloads = payloads
-            .into_values()
-            .map(|payload| payload.downcast::<Round1Payload>())
-            .collect::<Result<Vec<_>, _>>()?;
+        let typed_payloads = payloads.try_map_downcast::<Round1Payload>()?;
         let sum = self.context.ids_to_positions[&self.context.id]
-            + typed_payloads.iter().map(|payload| payload.x).sum::<u8>();
+            + typed_payloads.values().map(|payload| payload.x).sum::<u8>();
 
         Ok(FinalizeOutcome::Result(sum + self.round1_sum))
     }
