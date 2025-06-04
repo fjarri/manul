@@ -1,6 +1,12 @@
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    format,
+};
+use core::fmt::Debug;
 
-use crate::protocol::{Artifact, LocalError, Payload};
+use crate::protocol::{
+    Artifact, LocalError, Payload, ProtocolValidationError,
+};
 
 /// Implemented by collections allowing removal of a specific item.
 pub trait Without<T> {
@@ -95,5 +101,38 @@ impl<K: Ord> MapDowncast for BTreeMap<K, Artifact> {
         self.into_iter()
             .map(|(k, artifact)| artifact.downcast::<T>().map(|v| (k, v)))
             .collect::<Result<_, _>>()
+    }
+}
+
+/// Implemented by map-like collections allowing getting a value by key,
+/// returning a context-appropriate error.
+pub trait SafeGet<K, V> {
+    /// Returns the value corresponding to `key` assuming the value exists given the previous logic.
+    ///
+    /// `container` is the description of the map the method is called on,
+    /// and will be used in the error message.
+    ///
+    /// This would generally be used in protocol implementations when querying internal storage
+    /// that was filled in the previous rounds.
+    fn safe_get(&self, container: &str, key: &K) -> Result<&V, LocalError>;
+
+    /// Returns the value corresponding to `key` assuming the mapping was supplied from an external source.
+    ///
+    /// `container` is the description of the map the method is called on,
+    /// and will be used in the error message.
+    ///
+    /// This would generally be used in evidence checking logic.
+    fn try_get(&self, container: &str, key: &K) -> Result<&V, ProtocolValidationError>;
+}
+
+impl<K: Ord + Debug, V> SafeGet<K, V> for BTreeMap<K, V> {
+    fn safe_get(&self, container: &str, key: &K) -> Result<&V, LocalError> {
+        self.get(key)
+            .ok_or_else(|| LocalError::new(format!("Key {key:?} not found in {container}")))
+    }
+
+    fn try_get(&self, container: &str, key: &K) -> Result<&V, ProtocolValidationError> {
+        self.get(key)
+            .ok_or_else(|| ProtocolValidationError::InvalidEvidence(format!("Key {key:?} not found in {container}")))
     }
 }
