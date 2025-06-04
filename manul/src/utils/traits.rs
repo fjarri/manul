@@ -186,3 +186,16 @@ impl<K: Clone + Ord> MapDeserialize for BTreeMap<K, EchoBroadcast> {
         Ok(deserialized)
     }
 }
+
+/// Returns an error if `condition` is false.
+///
+/// A shortcut to use in evidence checking logic.
+pub fn verify_that(condition: bool) -> Result<(), ProtocolValidationError> {
+    if condition {
+        Ok(())
+    } else {
+        Err(ProtocolValidationError::InvalidEvidence(
+            "the reported error cannot be reproduced".into(),
+        ))
+    }
+}
