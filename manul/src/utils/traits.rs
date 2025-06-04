@@ -4,9 +4,7 @@ use alloc::{
 };
 use core::fmt::Debug;
 
-use crate::protocol::{
-    Artifact, LocalError, Payload, ProtocolValidationError,
-};
+use crate::protocol::{Artifact, LocalError, Payload, ProtocolValidationError, RoundId};
 
 /// Implemented by collections allowing removal of a specific item.
 pub trait Without<T> {
@@ -134,5 +132,22 @@ impl<K: Ord + Debug, V> SafeGet<K, V> for BTreeMap<K, V> {
     fn try_get(&self, container: &str, key: &K) -> Result<&V, ProtocolValidationError> {
         self.get(key)
             .ok_or_else(|| ProtocolValidationError::InvalidEvidence(format!("Key {key:?} not found in {container}")))
+    }
+}
+
+/// Implemented by map-like collections allowing getting a value by round number.
+pub trait GetRound<V> {
+    /// Returns the value corresponding to [`RoundId`] created from `round_num`
+    /// assuming the mapping was supplied from an external source.
+    ///
+    /// This would generally be used in evidence checking logic.
+    fn get_round(&self, round_num: u8) -> Result<&V, ProtocolValidationError>;
+}
+
+impl<V> GetRound<V> for BTreeMap<RoundId, V> {
+    fn get_round(&self, round_num: u8) -> Result<&V, ProtocolValidationError> {
+        self.get(&RoundId::new(round_num)).ok_or_else(|| {
+            ProtocolValidationError::InvalidEvidence(format!("The entry for round {round_num} is not present"))
+        })
     }
 }

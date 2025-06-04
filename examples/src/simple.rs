@@ -8,7 +8,7 @@ use manul::{
         ProtocolError, ProtocolMessage, ProtocolMessagePart, ProtocolValidationError, ReceiveError,
         RequiredMessageParts, RequiredMessages, Round, RoundId, TransitionInfo,
     },
-    utils::{MapDowncast, Without},
+    utils::{GetRound, MapDowncast, Without},
 };
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
@@ -58,9 +58,7 @@ impl<Id> ProtocolError<Id> for SimpleProtocolError {
             }
             SimpleProtocolError::Round2InvalidPosition => {
                 let _r1_message = message.direct_message.deserialize::<Round1Message>(format)?;
-                let r1_echos_serialized = combined_echos
-                    .get(&1.into())
-                    .ok_or_else(|| LocalError::new("Could not find combined echos for Round 1"))?;
+                let r1_echos_serialized = combined_echos.get_round(1)?;
 
                 // Deserialize the echos
                 let _r1_echos = r1_echos_serialized
