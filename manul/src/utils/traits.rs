@@ -4,7 +4,10 @@ use alloc::{
 };
 use core::fmt::Debug;
 
-use crate::protocol::{Artifact, LocalError, Payload, ProtocolValidationError, RoundId};
+use crate::protocol::{
+    Artifact, BoxedFormat, EchoBroadcast, LocalError, Payload, ProtocolMessagePart, ProtocolValidationError, RoundId,
+};
+use serde::Deserialize;
 
 /// Implemented by collections allowing removal of a specific item.
 pub trait Without<T> {
@@ -149,5 +152,37 @@ impl<V> GetRound<V> for BTreeMap<RoundId, V> {
         self.get(&RoundId::new(round_num)).ok_or_else(|| {
             ProtocolValidationError::InvalidEvidence(format!("The entry for round {round_num} is not present"))
         })
+    }
+}
+
+/// Implemented by map-like collections allowing deserializing all values.
+pub trait MapDeserialize {
+    /// The resulting type (parametrized by the concrete type of the value).
+    type Result<T>;
+
+    /// Attempts to deserialize all values using the given `format`.
+    ///
+    /// This would generally be used in evidence checking logic.
+    fn map_deserialize<T: for<'de> Deserialize<'de>>(
+        &self,
+        format: &BoxedFormat,
+    ) -> Result<Self::Result<T>, ProtocolValidationError>;
+}
+
+impl<K: Clone + Ord> MapDeserialize for BTreeMap<K, EchoBroadcast> {
+    type Result<T> = BTreeMap<K, T>;
+
+    fn map_deserialize<T: for<'de> Deserialize<'de>>(
+        &self,
+        format: &BoxedFormat,
+    ) -> Result<BTreeMap<K, T>, ProtocolValidationError> {
+        let deserialized = self
+            .iter()
+            .map(|(id, echo)| {
+                echo.deserialize::<T>(format)
+                    .map(|deserialized| (id.clone(), deserialized))
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        Ok(deserialized)
     }
 }

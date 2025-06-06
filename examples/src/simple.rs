@@ -8,7 +8,7 @@ use manul::{
         ProtocolError, ProtocolMessage, ProtocolMessagePart, ProtocolValidationError, ReceiveError,
         RequiredMessageParts, RequiredMessages, Round, RoundId, TransitionInfo,
     },
-    utils::{GetRound, MapDowncast, Without},
+    utils::{GetRound, MapDeserialize, MapDowncast, Without},
 };
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,10 @@ pub enum SimpleProtocolError {
     Round2InvalidPosition,
 }
 
-impl<Id> ProtocolError<Id> for SimpleProtocolError {
+impl<Id> ProtocolError<Id> for SimpleProtocolError
+where
+    Id: PartyId,
+{
     type AssociatedData = ();
 
     fn required_messages(&self) -> RequiredMessages {
@@ -61,10 +64,7 @@ impl<Id> ProtocolError<Id> for SimpleProtocolError {
                 let r1_echos_serialized = combined_echos.get_round(1)?;
 
                 // Deserialize the echos
-                let _r1_echos = r1_echos_serialized
-                    .values()
-                    .map(|echo| echo.deserialize::<Round1Echo>(format))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let _r1_echos = r1_echos_serialized.map_deserialize::<Round1Echo>(format)?;
 
                 // Message contents would be checked here
                 Ok(())
@@ -73,7 +73,10 @@ impl<Id> ProtocolError<Id> for SimpleProtocolError {
     }
 }
 
-impl<Id> Protocol<Id> for SimpleProtocol {
+impl<Id> Protocol<Id> for SimpleProtocol
+where
+    Id: PartyId,
+{
     type Result = u8;
     type ProtocolError = SimpleProtocolError;
 
