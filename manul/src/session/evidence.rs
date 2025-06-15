@@ -250,7 +250,9 @@ where
         let format = BoxedFormat::new::<SP::WireFormat>();
         match &self.evidence {
             EvidenceEnum::Protocol(evidence) => evidence.verify::<SP>(&self.guilty_party, &format, associated_data),
-            EvidenceEnum::InvalidDirectMessage(evidence) => evidence.verify::<P, SP>(&self.guilty_party, &format),
+            EvidenceEnum::InvalidDirectMessage(evidence) => {
+                evidence.verify::<P, SP>(&self.guilty_party, &format, associated_data)
+            }
             EvidenceEnum::InvalidEchoBroadcast(evidence) => evidence.verify::<P, SP>(&self.guilty_party, &format),
             EvidenceEnum::InvalidNormalBroadcast(evidence) => evidence.verify::<P, SP>(&self.guilty_party, &format),
             EvidenceEnum::InvalidEchoPack(evidence) => evidence.verify(&self.guilty_party, &format),
@@ -342,7 +344,12 @@ impl MismatchedBroadcastsEvidence {
 pub struct InvalidDirectMessageEvidence(SignedMessagePart<DirectMessage>);
 
 impl InvalidDirectMessageEvidence {
-    fn verify<P, SP>(&self, verifier: &SP::Verifier, format: &BoxedFormat) -> Result<(), EvidenceError>
+    fn verify<P, SP>(
+        &self,
+        verifier: &SP::Verifier,
+        format: &BoxedFormat,
+        associated_data: &<P::ProtocolError as ProtocolError<SP::Verifier>>::AssociatedData,
+    ) -> Result<(), EvidenceError>
     where
         P: Protocol<SP::Verifier>,
         SP: SessionParameters,
@@ -357,6 +364,7 @@ impl InvalidDirectMessageEvidence {
                 format,
                 self.0.metadata().round_id(),
                 payload,
+                associated_data,
             )?)
         }
     }

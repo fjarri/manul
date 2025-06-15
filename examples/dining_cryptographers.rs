@@ -55,9 +55,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use manul::{
     dev::{run_sync, BinaryFormat, TestHasher, TestSignature, TestSigner, TestVerifier},
     protocol::{
-        BoxedFormat, BoxedRound, CommunicationInfo, DirectMessage, EchoBroadcast, EchoRoundParticipation, EntryPoint,
-        FinalizeOutcome, LocalError, MessageValidationError, NoMessage, NoProtocolErrors, NormalBroadcast, Protocol,
-        ReceiveError, RoundId, StaticProtocolMessage, StaticRound, TransitionInfo,
+        BoxedRound, BoxedRoundInfo, CommunicationInfo, EchoRoundParticipation, EntryPoint, FinalizeOutcome, LocalError,
+        NoMessage, NoProtocolErrors, Protocol, ReceiveError, RoundId, StaticProtocolMessage, StaticRound,
+        TransitionInfo,
     },
     session::SessionParameters,
 };
@@ -73,35 +73,19 @@ use tracing::{debug, info, trace};
 #[derive(Debug)]
 pub struct DiningCryptographersProtocol;
 
-impl<Id> Protocol<Id> for DiningCryptographersProtocol {
+impl Protocol<DinerId> for DiningCryptographersProtocol {
     // XOR/¬XOR of the two bits of each of the three diners (one is their own cointoss, the other shared with their
     // neighbour).
     type Result = (bool, bool, bool);
 
     type ProtocolError = NoProtocolErrors;
 
-    fn verify_direct_message_is_invalid(
-        _format: &BoxedFormat,
-        _round_id: &RoundId,
-        _message: &DirectMessage,
-    ) -> Result<(), MessageValidationError> {
-        Ok(())
-    }
-
-    fn verify_echo_broadcast_is_invalid(
-        _format: &BoxedFormat,
-        _round_id: &RoundId,
-        _message: &EchoBroadcast,
-    ) -> Result<(), MessageValidationError> {
-        Ok(())
-    }
-
-    fn verify_normal_broadcast_is_invalid(
-        _format: &BoxedFormat,
-        _round_id: &RoundId,
-        _message: &NormalBroadcast,
-    ) -> Result<(), MessageValidationError> {
-        Ok(())
+    fn round_info(round_id: &RoundId) -> Option<BoxedRoundInfo<DinerId, Self>> {
+        match round_id {
+            _ if round_id == 1 => Some(BoxedRoundInfo::new::<Round1>()),
+            _ if round_id == 2 => Some(BoxedRoundInfo::new::<Round2>()),
+            _ => None,
+        }
     }
 }
 
@@ -166,12 +150,12 @@ impl StaticRound<DinerId> for Round1 {
         &self,
         _rng: &mut dyn CryptoRngCore,
         destination: &DinerId,
-    ) -> Result<(Self::DirectMessage, Option<Self::Artifact>), LocalError> {
+    ) -> Result<Option<(Self::DirectMessage, Self::Artifact)>, LocalError> {
         info!(
             "[Round1, make_direct_message] from {:?} to {destination:?}",
             self.diner_id
         );
-        Ok((Round1Message { toss: self.own_toss }, None))
+        Ok(Some((Round1Message { toss: self.own_toss }, ())))
     }
 
     // This is called when this diner receives a bit from their neighbour.
@@ -254,7 +238,7 @@ impl StaticRound<DinerId> for Round2 {
     }
 
     // Implementing this method means that Round 2 will make a broadcast (without echoes).
-    fn make_normal_broadcast(&self, _rng: &mut dyn CryptoRngCore) -> Result<Self::NormalBroadcast, LocalError> {
+    fn make_normal_broadcast(&self, _rng: &mut dyn CryptoRngCore) -> Result<Option<Self::NormalBroadcast>, LocalError> {
         debug!(
             "[Round2, make_normal_broadcast] {:?} broadcasts to everyone else",
             self.diner_id
@@ -265,7 +249,7 @@ impl StaticRound<DinerId> for Round2 {
         } else {
             self.own_toss ^ self.neighbour_toss
         };
-        Ok(Round2Message { reveal })
+        Ok(Some(Round2Message { reveal }))
     }
 
     // Called once for each diner as messages are delivered to it. Here we deserialize the message using the configured

@@ -55,9 +55,9 @@ use core::fmt::{self, Debug};
 use rand_core::CryptoRngCore;
 
 use crate::protocol::{
-    Artifact, BoxedFormat, BoxedRound, CommunicationInfo, DirectMessage, EchoBroadcast, EntryPoint, FinalizeOutcome,
-    LocalError, MessageValidationError, NormalBroadcast, PartyId, Payload, Protocol, ProtocolError, ProtocolMessage,
-    ProtocolValidationError, ReceiveError, RequiredMessages, Round, RoundId, TransitionInfo,
+    Artifact, BoxedFormat, BoxedRound, BoxedRoundInfo, CommunicationInfo, DirectMessage, EchoBroadcast, EntryPoint,
+    FinalizeOutcome, LocalError, MessageValidationError, NormalBroadcast, PartyId, Payload, Protocol, ProtocolError,
+    ProtocolMessage, ProtocolValidationError, ReceiveError, RequiredMessages, Round, RoundId, TransitionInfo,
 };
 
 /// A marker trait that is used to disambiguate blanket trait implementations for [`Protocol`] and [`EntryPoint`].
@@ -205,16 +205,28 @@ where
     type Result = <C::Protocol2 as Protocol<Id>>::Result;
     type ProtocolError = ChainedProtocolError<Id, C>;
 
+    fn round_info(_round_id: &RoundId) -> Option<BoxedRoundInfo<Id, Self>> {
+        /*let rounds1 = C::Protocol1::rounds()
+            .into_iter()
+            .map(|(round_id, round)| (round_id.group_under(1), round));
+        let rounds2 = C::Protocol2::rounds()
+            .into_iter()
+            .map(|(round_id, round)| (round_id.group_under(2), round));
+        rounds1.chain(rounds2).collect()*/
+        unimplemented!()
+    }
+
     fn verify_direct_message_is_invalid(
         format: &BoxedFormat,
         round_id: &RoundId,
         message: &DirectMessage,
+        associated_data: &<Self::ProtocolError as ProtocolError<Id>>::AssociatedData,
     ) -> Result<(), MessageValidationError> {
         let (group, round_id) = round_id.split_group()?;
         if group == 1 {
-            C::Protocol1::verify_direct_message_is_invalid(format, &round_id, message)
+            C::Protocol1::verify_direct_message_is_invalid(format, &round_id, message, &associated_data.protocol1)
         } else {
-            C::Protocol2::verify_direct_message_is_invalid(format, &round_id, message)
+            C::Protocol2::verify_direct_message_is_invalid(format, &round_id, message, &associated_data.protocol2)
         }
     }
 
