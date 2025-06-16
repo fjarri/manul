@@ -72,6 +72,20 @@ pub trait StaticRound<Id>: 'static + Debug + Send + Sync + DynTypeId {
         true
     }
 
+    fn expects_normal_broadcast(
+        round_id: &RoundId,
+        associated_data: &<<Self::Protocol as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
+    ) -> bool {
+        true
+    }
+
+    fn expects_echo_broadcast(
+        round_id: &RoundId,
+        associated_data: &<<Self::Protocol as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
+    ) -> bool {
+        true
+    }
+
     /// Returns the direct message to the given destination and (maybe) an accompanying artifact.
     ///
     /// Return [`DirectMessage::none`] if this round does not send direct messages.
