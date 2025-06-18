@@ -23,13 +23,17 @@ pub trait RoundInfo<Id>: Debug {
     ) -> Result<(), MessageValidationError>;
     fn verify_echo_broadcast_is_invalid(
         &self,
+        round_id: &RoundId,
         format: &BoxedFormat,
         message: &EchoBroadcast,
+        associated_data: &<<Self::Protocol as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
     ) -> Result<(), MessageValidationError>;
     fn verify_normal_broadcast_is_invalid(
         &self,
+        round_id: &RoundId,
         format: &BoxedFormat,
         message: &NormalBroadcast,
+        associated_data: &<<Self::Protocol as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
     ) -> Result<(), MessageValidationError>;
 }
 
@@ -58,25 +62,29 @@ where
 
     fn verify_echo_broadcast_is_invalid(
         &self,
+        round_id: &RoundId,
         format: &BoxedFormat,
         message: &EchoBroadcast,
+        associated_data: &<<Self::Protocol as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
     ) -> Result<(), MessageValidationError> {
-        if NoMessage::equals::<R::EchoBroadcast>() {
-            message.verify_is_not::<R::EchoBroadcast>(format)
-        } else {
+        if NoMessage::equals::<R::EchoBroadcast>() || !R::expects_echo_broadcast(round_id, associated_data) {
             message.verify_is_some()
+        } else {
+            message.verify_is_not::<R::EchoBroadcast>(format)
         }
     }
 
     fn verify_normal_broadcast_is_invalid(
         &self,
+        round_id: &RoundId,
         format: &BoxedFormat,
         message: &NormalBroadcast,
+        associated_data: &<<Self::Protocol as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
     ) -> Result<(), MessageValidationError> {
-        if NoMessage::equals::<R::NormalBroadcast>() {
-            message.verify_is_not::<R::NormalBroadcast>(format)
-        } else {
+        if NoMessage::equals::<R::NormalBroadcast>() || !R::expects_normal_broadcast(round_id, associated_data) {
             message.verify_is_some()
+        } else {
+            message.verify_is_not::<R::NormalBroadcast>(format)
         }
     }
 }
@@ -95,30 +103,11 @@ where
         Self(Box::new(StaticRoundInfoAdapter(PhantomData::<R>)))
     }
 
-    pub(crate) fn verify_direct_message_is_invalid(
-        &self,
-        round_id: &RoundId,
-        format: &BoxedFormat,
-        message: &DirectMessage,
-        associated_data: &<P::ProtocolError as ProtocolError<Id>>::AssociatedData,
-    ) -> Result<(), MessageValidationError> {
-        self.0
-            .verify_direct_message_is_invalid(round_id, format, message, associated_data)
+    pub(crate) fn new_obj(obj: Box<dyn RoundInfo<Id, Protocol = P>>) -> Self {
+        Self(obj)
     }
 
-    pub(crate) fn verify_echo_broadcast_is_invalid(
-        &self,
-        format: &BoxedFormat,
-        message: &EchoBroadcast,
-    ) -> Result<(), MessageValidationError> {
-        self.0.verify_echo_broadcast_is_invalid(format, message)
-    }
-
-    pub(crate) fn verify_normal_broadcast_is_invalid(
-        &self,
-        format: &BoxedFormat,
-        message: &NormalBroadcast,
-    ) -> Result<(), MessageValidationError> {
-        self.0.verify_normal_broadcast_is_invalid(format, message)
+    pub(crate) fn as_ref(&self) -> &dyn RoundInfo<Id, Protocol = P> {
+        self.0.as_ref()
     }
 }

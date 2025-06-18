@@ -37,3 +37,4 @@ pub use static_round::{NoMessage, StaticProtocolMessage, StaticRound};
 
 pub(crate) use errors::ReceiveErrorType;
 pub(crate) use message::ProtocolMessagePartHashable;
+pub(crate) use round_info::RoundInfo;

@@ -253,8 +253,12 @@ where
             EvidenceEnum::InvalidDirectMessage(evidence) => {
                 evidence.verify::<P, SP>(&self.guilty_party, &format, associated_data)
             }
-            EvidenceEnum::InvalidEchoBroadcast(evidence) => evidence.verify::<P, SP>(&self.guilty_party, &format),
-            EvidenceEnum::InvalidNormalBroadcast(evidence) => evidence.verify::<P, SP>(&self.guilty_party, &format),
+            EvidenceEnum::InvalidEchoBroadcast(evidence) => {
+                evidence.verify::<P, SP>(&self.guilty_party, &format, associated_data)
+            }
+            EvidenceEnum::InvalidNormalBroadcast(evidence) => {
+                evidence.verify::<P, SP>(&self.guilty_party, &format, associated_data)
+            }
             EvidenceEnum::InvalidEchoPack(evidence) => evidence.verify(&self.guilty_party, &format),
             EvidenceEnum::MismatchedBroadcasts(evidence) => evidence.verify::<SP>(&self.guilty_party),
         }
@@ -360,12 +364,17 @@ impl InvalidDirectMessageEvidence {
         if self.0.metadata().round_id().is_echo() {
             Ok(EchoRound::<P, SP>::verify_direct_message_is_invalid(payload)?)
         } else {
-            Ok(P::verify_direct_message_is_invalid(
-                format,
-                self.0.metadata().round_id(),
-                payload,
-                associated_data,
-            )?)
+            let round_id = self.0.metadata().round_id();
+            let round_info = P::round_info(round_id)
+                .ok_or_else(|| EvidenceError::InvalidEvidence(format!("{round_id} is not in the protocol")))?;
+            // TODO: make error conversion automatic
+            round_info
+                .as_ref()
+                .verify_direct_message_is_invalid(round_id, format, payload, associated_data)
+                .map_err(|err| match err {
+                    MessageValidationError::Local(err) => EvidenceError::Local(err),
+                    MessageValidationError::InvalidEvidence(err) => EvidenceError::InvalidEvidence(err),
+                })
         }
     }
 }
@@ -374,7 +383,12 @@ impl InvalidDirectMessageEvidence {
 pub struct InvalidEchoBroadcastEvidence(SignedMessagePart<EchoBroadcast>);
 
 impl InvalidEchoBroadcastEvidence {
-    fn verify<P, SP>(&self, verifier: &SP::Verifier, format: &BoxedFormat) -> Result<(), EvidenceError>
+    fn verify<P, SP>(
+        &self,
+        verifier: &SP::Verifier,
+        format: &BoxedFormat,
+        associated_data: &<P::ProtocolError as ProtocolError<SP::Verifier>>::AssociatedData,
+    ) -> Result<(), EvidenceError>
     where
         P: Protocol<SP::Verifier>,
         SP: SessionParameters,
@@ -385,11 +399,16 @@ impl InvalidEchoBroadcastEvidence {
         if self.0.metadata().round_id().is_echo() {
             Ok(EchoRound::<P, SP>::verify_echo_broadcast_is_invalid(payload)?)
         } else {
-            Ok(P::verify_echo_broadcast_is_invalid(
-                format,
-                self.0.metadata().round_id(),
-                payload,
-            )?)
+            let round_id = self.0.metadata().round_id();
+            let round_info = P::round_info(round_id)
+                .ok_or_else(|| EvidenceError::InvalidEvidence(format!("{round_id} is not in the protocol")))?;
+            round_info
+                .as_ref()
+                .verify_echo_broadcast_is_invalid(round_id, format, payload, associated_data)
+                .map_err(|err| match err {
+                    MessageValidationError::Local(err) => EvidenceError::Local(err),
+                    MessageValidationError::InvalidEvidence(err) => EvidenceError::InvalidEvidence(err),
+                })
         }
     }
 }
@@ -398,7 +417,12 @@ impl InvalidEchoBroadcastEvidence {
 pub struct InvalidNormalBroadcastEvidence(SignedMessagePart<NormalBroadcast>);
 
 impl InvalidNormalBroadcastEvidence {
-    fn verify<P, SP>(&self, verifier: &SP::Verifier, format: &BoxedFormat) -> Result<(), EvidenceError>
+    fn verify<P, SP>(
+        &self,
+        verifier: &SP::Verifier,
+        format: &BoxedFormat,
+        associated_data: &<P::ProtocolError as ProtocolError<SP::Verifier>>::AssociatedData,
+    ) -> Result<(), EvidenceError>
     where
         P: Protocol<SP::Verifier>,
         SP: SessionParameters,
@@ -409,11 +433,16 @@ impl InvalidNormalBroadcastEvidence {
         if self.0.metadata().round_id().is_echo() {
             Ok(EchoRound::<P, SP>::verify_normal_broadcast_is_invalid(format, payload)?)
         } else {
-            Ok(P::verify_normal_broadcast_is_invalid(
-                format,
-                self.0.metadata().round_id(),
-                payload,
-            )?)
+            let round_id = self.0.metadata().round_id();
+            let round_info = P::round_info(round_id)
+                .ok_or_else(|| EvidenceError::InvalidEvidence(format!("{round_id} is not in the protocol")))?;
+            round_info
+                .as_ref()
+                .verify_normal_broadcast_is_invalid(round_id, format, payload, associated_data)
+                .map_err(|err| match err {
+                    MessageValidationError::Local(err) => EvidenceError::Local(err),
+                    MessageValidationError::InvalidEvidence(err) => EvidenceError::InvalidEvidence(err),
+                })
         }
     }
 }

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     boxed_format::BoxedFormat,
     boxed_round::BoxedRound,
-    errors::{LocalError, MessageValidationError, ProtocolValidationError, ReceiveError},
+    errors::{LocalError, ProtocolValidationError, ReceiveError},
     message::{DirectMessage, EchoBroadcast, NormalBroadcast, ProtocolMessage, ProtocolMessagePart},
     round_id::{RoundId, TransitionInfo},
     round_info::BoxedRoundInfo,
@@ -76,56 +76,6 @@ pub trait Protocol<Id>: 'static + Sized {
 
     /// Returns the wrapped round types for each round mapped to round IDs.
     fn round_info(round_id: &RoundId) -> Option<BoxedRoundInfo<Id, Self>>;
-
-    // TODO: move out of `Protocol`. To `evidence.rs`, perhaps?
-    /// Returns `Ok(())` if the given direct message cannot be deserialized
-    /// assuming it is a direct message from the round `round_id`.
-    ///
-    /// Normally one would use [`ProtocolMessagePart::verify_is_not`] and [`ProtocolMessagePart::verify_is_some`]
-    /// when implementing this.
-    fn verify_direct_message_is_invalid(
-        format: &BoxedFormat,
-        round_id: &RoundId,
-        message: &DirectMessage,
-        associated_data: &<Self::ProtocolError as ProtocolError<Id>>::AssociatedData,
-    ) -> Result<(), MessageValidationError> {
-        let round_info = Self::round_info(round_id).ok_or_else(|| {
-            MessageValidationError::Local(LocalError::new(format!("{round_id} is not in the protocol")))
-        })?;
-        round_info.verify_direct_message_is_invalid(round_id, format, message, associated_data)
-    }
-
-    /// Returns `Ok(())` if the given echo broadcast cannot be deserialized
-    /// assuming it is an echo broadcast from the round `round_id`.
-    ///
-    /// Normally one would use [`ProtocolMessagePart::verify_is_not`] and [`ProtocolMessagePart::verify_is_some`]
-    /// when implementing this.
-    fn verify_echo_broadcast_is_invalid(
-        format: &BoxedFormat,
-        round_id: &RoundId,
-        message: &EchoBroadcast,
-    ) -> Result<(), MessageValidationError> {
-        let round_info = Self::round_info(round_id).ok_or_else(|| {
-            MessageValidationError::Local(LocalError::new(format!("{round_id} is not in the protocol")))
-        })?;
-        round_info.verify_echo_broadcast_is_invalid(format, message)
-    }
-
-    /// Returns `Ok(())` if the given echo broadcast cannot be deserialized
-    /// assuming it is an echo broadcast from the round `round_id`.
-    ///
-    /// Normally one would use [`ProtocolMessagePart::verify_is_not`] and [`ProtocolMessagePart::verify_is_some`]
-    /// when implementing this.
-    fn verify_normal_broadcast_is_invalid(
-        format: &BoxedFormat,
-        round_id: &RoundId,
-        message: &NormalBroadcast,
-    ) -> Result<(), MessageValidationError> {
-        let round_info = Self::round_info(round_id).ok_or_else(|| {
-            MessageValidationError::Local(LocalError::new(format!("{round_id} is not in the protocol")))
-        })?;
-        round_info.verify_normal_broadcast_is_invalid(format, message)
-    }
 }
 
 /// Declares which parts of the message from a round have to be stored to serve as the evidence of malicious behavior.
