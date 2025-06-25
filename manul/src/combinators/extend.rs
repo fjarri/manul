@@ -7,9 +7,10 @@ use dyn_clone::DynClone;
 use rand_core::CryptoRngCore;
 
 use crate::protocol::{
-    Artifact, BoxedFormat, BoxedRound, CommunicationInfo, DirectMessage, EchoBroadcast, EntryPoint, FinalizeOutcome,
-    LocalError, NormalBroadcast, PartyId, Payload, Protocol, ProtocolMessage, ReceiveError, Round, RoundId,
-    StaticProtocolMessage, StaticRound, StaticRoundAdapter, TransitionInfo,
+    Artifact, BoxedFormat, BoxedRound, CommunicationInfo, DirectMessage, EchoBroadcast, EntryPoint, EvidenceMessages,
+    FinalizeOutcome, LocalError, NormalBroadcast, PartyId, Payload, Protocol, ProtocolMessage, ProtocolValidationError,
+    ProvableError, ReceiveError, RequiredMessages, Round, RoundId, StaticProtocolMessage, StaticRound,
+    StaticRoundAdapter, TransitionInfo,
 };
 
 pub trait Extension<Id>: 'static + Debug + Send + Sync + Clone {
@@ -57,6 +58,26 @@ pub trait Extension<Id>: 'static + Debug + Send + Sync + Clone {
     }
 }
 
+#[derive_where::derive_where(Debug, Clone, Serialize, Deserialize)]
+struct ExtendedProvableError<Id, Ext: Extension<Id>>(<Ext::Round as StaticRound<Id>>::ProvableError);
+
+impl<Id: PartyId, Ext: Extension<Id>> ProvableError<Id> for ExtendedProvableError<Id, Ext> {
+    type Round = ExtendedRound<Id, Ext>;
+    fn required_previous_messages(&self) -> RequiredMessages {
+        self.0.required_previous_messages()
+    }
+    fn verify_evidence(
+        &self,
+        from: &Id,
+        shared_randomness: &[u8],
+        shared_data: &<<Self::Round as StaticRound<Id>>::Protocol as Protocol<Id>>::SharedData,
+        messages: EvidenceMessages<Id, Self::Round>,
+    ) -> Result<(), ProtocolValidationError> {
+        let messages = messages.into_round::<Ext::Round>();
+        self.0.verify_evidence(from, shared_randomness, shared_data, messages)
+    }
+}
+
 #[allow(clippy::type_complexity)]
 #[derive_where::derive_where(Debug)]
 struct ExtendedRound<Id, Ext: Extension<Id>> {
@@ -71,6 +92,7 @@ where
     Ext: Extension<Id>,
 {
     type Protocol = <Ext::Round as StaticRound<Id>>::Protocol;
+    type ProvableError = ExtendedProvableError<Id, Ext>;
 
     type DirectMessage = <Ext::Round as StaticRound<Id>>::DirectMessage;
     type NormalBroadcast = <Ext::Round as StaticRound<Id>>::NormalBroadcast;
