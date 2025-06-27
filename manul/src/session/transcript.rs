@@ -7,7 +7,10 @@ use alloc::{
 use core::fmt::Debug;
 
 use super::{evidence::Evidence, message::SignedMessagePart, session::SessionParameters, LocalError, RemoteError};
-use crate::protocol::{DirectMessage, EchoBroadcast, NormalBroadcast, Protocol, RoundId};
+use crate::{
+    dyn_protocol::{DirectMessage, EchoBroadcast, NormalBroadcast},
+    protocol::{Protocol, RoundId},
+};
 
 #[derive(Debug)]
 pub(crate) struct Transcript<P: Protocol<SP::Verifier>, SP: SessionParameters> {

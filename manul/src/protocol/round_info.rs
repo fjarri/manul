@@ -1,48 +1,61 @@
-#![allow(dead_code, unused_variables, missing_docs)]
-
-use alloc::boxed::Box;
+use alloc::{boxed::Box, collections::BTreeMap, format};
 use core::{fmt::Debug, marker::PhantomData};
 
 use super::{
-    boxed_format::BoxedFormat,
-    errors::MessageValidationError,
-    message::{DirectMessage, EchoBroadcast, NormalBroadcast, ProtocolMessagePart},
-    round::{Protocol, ProtocolError},
+    evidence::{EvidenceError, EvidenceMessages, ProvableError},
+    round::{NoMessage, Protocol, Round},
     round_id::RoundId,
-    static_round::{NoMessage, StaticRound},
+};
+use crate::dyn_protocol::{
+    BoxedFormat, DirectMessage, EchoBroadcast, NormalBroadcast, ProtocolMessage, ProtocolMessagePart,
+    SerializedProvableError,
 };
 
-pub trait RoundInfo<Id>: Debug {
+pub(crate) trait DynRoundInfo<Id>: Debug {
     type Protocol: Protocol<Id>;
     fn verify_direct_message_is_invalid(
         &self,
         round_id: &RoundId,
         format: &BoxedFormat,
         message: &DirectMessage,
-        associated_data: &<<Self::Protocol as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
-    ) -> Result<(), MessageValidationError>;
+        shared_data: &<Self::Protocol as Protocol<Id>>::SharedData,
+    ) -> Result<(), EvidenceError>;
     fn verify_echo_broadcast_is_invalid(
         &self,
         round_id: &RoundId,
         format: &BoxedFormat,
         message: &EchoBroadcast,
-        associated_data: &<<Self::Protocol as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
-    ) -> Result<(), MessageValidationError>;
+        shared_data: &<Self::Protocol as Protocol<Id>>::SharedData,
+    ) -> Result<(), EvidenceError>;
     fn verify_normal_broadcast_is_invalid(
         &self,
         round_id: &RoundId,
         format: &BoxedFormat,
         message: &NormalBroadcast,
-        associated_data: &<<Self::Protocol as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
-    ) -> Result<(), MessageValidationError>;
+        shared_data: &<Self::Protocol as Protocol<Id>>::SharedData,
+    ) -> Result<(), EvidenceError>;
+
+    #[allow(clippy::too_many_arguments)]
+    fn verify_evidence(
+        &self,
+        round_id: &RoundId,
+        format: &BoxedFormat,
+        error: &SerializedProvableError,
+        guilty_party: &Id,
+        shared_randomness: &[u8],
+        shared_data: &<Self::Protocol as Protocol<Id>>::SharedData,
+        message: ProtocolMessage,
+        previous_messages: BTreeMap<RoundId, ProtocolMessage>,
+        combined_echos: BTreeMap<RoundId, BTreeMap<Id, EchoBroadcast>>,
+    ) -> Result<(), EvidenceError>;
 }
 
 #[derive_where::derive_where(Debug)]
 pub(crate) struct StaticRoundInfoAdapter<R>(PhantomData<R>);
 
-impl<Id, R> RoundInfo<Id> for StaticRoundInfoAdapter<R>
+impl<Id, R> DynRoundInfo<Id> for StaticRoundInfoAdapter<R>
 where
-    R: StaticRound<Id>,
+    R: Round<Id>,
 {
     type Protocol = R::Protocol;
 
@@ -51,9 +64,9 @@ where
         round_id: &RoundId,
         format: &BoxedFormat,
         message: &DirectMessage,
-        associated_data: &<<Self::Protocol as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
-    ) -> Result<(), MessageValidationError> {
-        if NoMessage::equals::<R::DirectMessage>() || !R::expects_direct_message(round_id, associated_data) {
+        shared_data: &<Self::Protocol as Protocol<Id>>::SharedData,
+    ) -> Result<(), EvidenceError> {
+        if NoMessage::equals::<R::DirectMessage>() || !R::expects_direct_message(round_id, shared_data) {
             message.verify_is_some()
         } else {
             message.verify_is_not::<R::DirectMessage>(format)
@@ -65,9 +78,9 @@ where
         round_id: &RoundId,
         format: &BoxedFormat,
         message: &EchoBroadcast,
-        associated_data: &<<Self::Protocol as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
-    ) -> Result<(), MessageValidationError> {
-        if NoMessage::equals::<R::EchoBroadcast>() || !R::expects_echo_broadcast(round_id, associated_data) {
+        shared_data: &<Self::Protocol as Protocol<Id>>::SharedData,
+    ) -> Result<(), EvidenceError> {
+        if NoMessage::equals::<R::EchoBroadcast>() || !R::expects_echo_broadcast(round_id, shared_data) {
             message.verify_is_some()
         } else {
             message.verify_is_not::<R::EchoBroadcast>(format)
@@ -79,35 +92,69 @@ where
         round_id: &RoundId,
         format: &BoxedFormat,
         message: &NormalBroadcast,
-        associated_data: &<<Self::Protocol as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
-    ) -> Result<(), MessageValidationError> {
-        if NoMessage::equals::<R::NormalBroadcast>() || !R::expects_normal_broadcast(round_id, associated_data) {
+        shared_data: &<Self::Protocol as Protocol<Id>>::SharedData,
+    ) -> Result<(), EvidenceError> {
+        if NoMessage::equals::<R::NormalBroadcast>() || !R::expects_normal_broadcast(round_id, shared_data) {
             message.verify_is_some()
         } else {
             message.verify_is_not::<R::NormalBroadcast>(format)
         }
     }
+
+    fn verify_evidence(
+        &self,
+        round_id: &RoundId,
+        format: &BoxedFormat,
+        error: &SerializedProvableError,
+        guilty_party: &Id,
+        shared_randomness: &[u8],
+        shared_data: &<Self::Protocol as Protocol<Id>>::SharedData,
+        message: ProtocolMessage,
+        previous_messages: BTreeMap<RoundId, ProtocolMessage>,
+        combined_echos: BTreeMap<RoundId, BTreeMap<Id, EchoBroadcast>>,
+    ) -> Result<(), EvidenceError> {
+        let error = error.deserialize::<Id, R>(format).map_err(|err| {
+            EvidenceError::InvalidEvidence(format!(
+                "Cannot deserialize the error as {}: {err}",
+                core::any::type_name::<R::ProvableError>()
+            ))
+        })?;
+        let evidence_messages = EvidenceMessages {
+            message,
+            previous_messages,
+            combined_echos,
+            format,
+            phantom: PhantomData,
+        };
+        error.verify_evidence(
+            round_id,
+            guilty_party,
+            shared_randomness,
+            shared_data,
+            evidence_messages,
+        )
+    }
 }
 
 #[derive_where::derive_where(Debug)]
-pub struct BoxedRoundInfo<Id, P: Protocol<Id>>(Box<dyn RoundInfo<Id, Protocol = P>>);
+pub struct RoundInfo<Id, P: Protocol<Id>>(Box<dyn DynRoundInfo<Id, Protocol = P>>);
 
-impl<Id, P> BoxedRoundInfo<Id, P>
+impl<Id, P> RoundInfo<Id, P>
 where
     P: Protocol<Id>,
 {
     pub fn new<R>() -> Self
     where
-        R: StaticRound<Id, Protocol = P>,
+        R: Round<Id, Protocol = P>,
     {
         Self(Box::new(StaticRoundInfoAdapter(PhantomData::<R>)))
     }
 
-    pub(crate) fn new_obj(obj: Box<dyn RoundInfo<Id, Protocol = P>>) -> Self {
-        Self(obj)
+    pub(crate) fn new_obj(round: impl DynRoundInfo<Id, Protocol = P> + 'static) -> Self {
+        Self(Box::new(round))
     }
 
-    pub(crate) fn as_ref(&self) -> &dyn RoundInfo<Id, Protocol = P> {
+    pub(crate) fn as_ref(&self) -> &dyn DynRoundInfo<Id, Protocol = P> {
         self.0.as_ref()
     }
 }

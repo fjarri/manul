@@ -11,7 +11,10 @@ use super::{
     wire_format::WireFormat,
     LocalError,
 };
-use crate::protocol::{DirectMessage, EchoBroadcast, NormalBroadcast, ProtocolMessagePartHashable, RoundId};
+use crate::{
+    dyn_protocol::{DirectMessage, EchoBroadcast, NormalBroadcast, ProtocolMessagePartHashable},
+    protocol::RoundId,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct SerializedSignature(#[serde(with = "SliceLike::<Hex>")] Box<[u8]>);

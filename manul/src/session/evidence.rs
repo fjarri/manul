@@ -3,7 +3,7 @@ use alloc::{
     format,
     string::{String, ToString},
 };
-use core::fmt::Debug;
+use core::{fmt::Debug, marker::PhantomData};
 
 use serde::{Deserialize, Serialize};
 
@@ -15,26 +15,14 @@ use super::{
     LocalError,
 };
 use crate::{
-    protocol::{
-        BoxedFormat, DirectMessage, DirectMessageError, EchoBroadcast, EchoBroadcastError, MessageValidationError,
-        NormalBroadcast, NormalBroadcastError, Protocol, ProtocolError, ProtocolMessage, ProtocolMessagePart,
-        ProtocolMessagePartHashable, ProtocolValidationError, RoundId,
+    dyn_protocol::{
+        BoxedFormat, BoxedProvableError, DirectMessage, DirectMessageError, EchoBroadcast, EchoBroadcastError,
+        NormalBroadcast, NormalBroadcastError, ProtocolMessage, ProtocolMessagePart, ProtocolMessagePartHashable,
+        SerializedProvableError,
     },
+    protocol::{EvidenceError, Protocol, RoundId},
     utils::SerializableMap,
 };
-
-/// Possible errors when verifying [`Evidence`] (evidence of malicious behavior).
-#[derive(Debug, Clone)]
-pub enum EvidenceError {
-    /// Indicates a runtime problem or a bug in the code.
-    Local(LocalError),
-    /// The evidence is improperly constructed
-    ///
-    /// This can indicate many things, such as: messages missing, invalid signatures, invalid messages,
-    /// the messages not actually proving the malicious behavior.
-    /// See the attached description for details.
-    InvalidEvidence(String),
-}
 
 impl From<MessageVerificationError> for EvidenceError {
     fn from(error: MessageVerificationError) -> Self {
@@ -54,27 +42,9 @@ impl From<NormalBroadcastError> for EvidenceError {
     }
 }
 
-impl From<MessageValidationError> for EvidenceError {
-    fn from(error: MessageValidationError) -> Self {
-        match error {
-            MessageValidationError::Local(error) => Self::Local(error),
-            MessageValidationError::InvalidEvidence(error) => Self::InvalidEvidence(error),
-        }
-    }
-}
-
-impl From<ProtocolValidationError> for EvidenceError {
-    fn from(error: ProtocolValidationError) -> Self {
-        match error {
-            ProtocolValidationError::Local(error) => Self::Local(error),
-            ProtocolValidationError::InvalidEvidence(error) => Self::InvalidEvidence(error),
-        }
-    }
-}
-
 /// A self-contained evidence of malicious behavior by a node.
 #[derive_where::derive_where(Debug)]
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Evidence<P: Protocol<SP::Verifier>, SP: SessionParameters> {
     guilty_party: SP::Verifier,
     description: String,
@@ -86,12 +56,13 @@ where
     P: Protocol<SP::Verifier>,
     SP: SessionParameters,
 {
-    pub(crate) fn new_protocol_error(
+    pub(crate) fn new_provable_error(
+        format: &BoxedFormat,
         verifier: &SP::Verifier,
         echo_broadcast: SignedMessagePart<EchoBroadcast>,
         normal_broadcast: SignedMessagePart<NormalBroadcast>,
         direct_message: SignedMessagePart<DirectMessage>,
-        error: P::ProtocolError,
+        error: BoxedProvableError<SP::Verifier>,
         transcript: &Transcript<P, SP>,
     ) -> Result<Self, LocalError> {
         let required_messages = error.required_messages();
@@ -115,23 +86,23 @@ where
         let mut echo_broadcasts = BTreeMap::new();
         let mut normal_broadcasts = BTreeMap::new();
         let mut direct_messages = BTreeMap::new();
-        if let Some(previous_rounds) = required_messages.previous_rounds {
+        if let Some(previous_rounds) = &required_messages.previous_rounds {
             for (round_id, required) in previous_rounds {
                 if required.echo_broadcast {
-                    echo_broadcasts.insert(round_id.clone(), transcript.get_echo_broadcast(&round_id, verifier)?);
+                    echo_broadcasts.insert(round_id.clone(), transcript.get_echo_broadcast(round_id, verifier)?);
                 }
                 if required.normal_broadcast {
-                    normal_broadcasts.insert(round_id.clone(), transcript.get_normal_broadcast(&round_id, verifier)?);
+                    normal_broadcasts.insert(round_id.clone(), transcript.get_normal_broadcast(round_id, verifier)?);
                 }
                 if required.direct_message {
-                    direct_messages.insert(round_id.clone(), transcript.get_direct_message(&round_id, verifier)?);
+                    direct_messages.insert(round_id.clone(), transcript.get_direct_message(round_id, verifier)?);
                 }
             }
         }
 
         let mut echo_hashes = BTreeMap::new();
         let mut other_echo_broadcasts = BTreeMap::new();
-        if let Some(required_combined_echos) = required_messages.combined_echos {
+        if let Some(required_combined_echos) = &required_messages.combined_echos {
             for round_id in required_combined_echos {
                 echo_hashes.insert(
                     round_id.clone(),
@@ -139,18 +110,18 @@ where
                 );
                 other_echo_broadcasts.insert(
                     round_id.clone(),
-                    transcript.get_other_echo_broadcasts(&round_id, verifier)?.into(),
+                    transcript.get_other_echo_broadcasts(round_id, verifier)?.into(),
                 );
             }
         }
 
-        let description = format!("Protocol error: {error}");
+        let description = format!("Protocol error: {}", error.as_ref().description());
 
         Ok(Self {
             guilty_party: verifier.clone(),
             description,
             evidence: EvidenceEnum::Protocol(ProtocolEvidence {
-                error,
+                error: error.into_boxed().serialize(format)?,
                 direct_message,
                 echo_broadcast,
                 normal_broadcast,
@@ -159,6 +130,7 @@ where
                 normal_broadcasts: normal_broadcasts.into(),
                 other_echo_broadcasts: other_echo_broadcasts.into(),
                 echo_hashes: echo_hashes.into(),
+                phantom: PhantomData,
             }),
         })
     }
@@ -243,21 +215,18 @@ where
     /// to prove the malicious behavior of [`Self::guilty_party`].
     ///
     /// Returns `Ok(())` if it is the case.
-    pub fn verify(
-        &self,
-        associated_data: &<P::ProtocolError as ProtocolError<SP::Verifier>>::AssociatedData,
-    ) -> Result<(), EvidenceError> {
+    pub fn verify(&self, shared_data: &P::SharedData) -> Result<(), EvidenceError> {
         let format = BoxedFormat::new::<SP::WireFormat>();
         match &self.evidence {
-            EvidenceEnum::Protocol(evidence) => evidence.verify::<SP>(&self.guilty_party, &format, associated_data),
+            EvidenceEnum::Protocol(evidence) => evidence.verify::<SP>(&self.guilty_party, &format, shared_data),
             EvidenceEnum::InvalidDirectMessage(evidence) => {
-                evidence.verify::<P, SP>(&self.guilty_party, &format, associated_data)
+                evidence.verify::<P, SP>(&self.guilty_party, &format, shared_data)
             }
             EvidenceEnum::InvalidEchoBroadcast(evidence) => {
-                evidence.verify::<P, SP>(&self.guilty_party, &format, associated_data)
+                evidence.verify::<P, SP>(&self.guilty_party, &format, shared_data)
             }
             EvidenceEnum::InvalidNormalBroadcast(evidence) => {
-                evidence.verify::<P, SP>(&self.guilty_party, &format, associated_data)
+                evidence.verify::<P, SP>(&self.guilty_party, &format, shared_data)
             }
             EvidenceEnum::InvalidEchoPack(evidence) => evidence.verify(&self.guilty_party, &format),
             EvidenceEnum::MismatchedBroadcasts(evidence) => evidence.verify::<SP>(&self.guilty_party),
@@ -266,7 +235,7 @@ where
 }
 
 #[derive_where::derive_where(Debug)]
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 enum EvidenceEnum<P: Protocol<SP::Verifier>, SP: SessionParameters> {
     Protocol(ProtocolEvidence<SP::Verifier, P>),
     InvalidDirectMessage(InvalidDirectMessageEvidence),
@@ -352,7 +321,7 @@ impl InvalidDirectMessageEvidence {
         &self,
         verifier: &SP::Verifier,
         format: &BoxedFormat,
-        associated_data: &<P::ProtocolError as ProtocolError<SP::Verifier>>::AssociatedData,
+        shared_data: &P::SharedData,
     ) -> Result<(), EvidenceError>
     where
         P: Protocol<SP::Verifier>,
@@ -370,11 +339,7 @@ impl InvalidDirectMessageEvidence {
             // TODO: make error conversion automatic
             round_info
                 .as_ref()
-                .verify_direct_message_is_invalid(round_id, format, payload, associated_data)
-                .map_err(|err| match err {
-                    MessageValidationError::Local(err) => EvidenceError::Local(err),
-                    MessageValidationError::InvalidEvidence(err) => EvidenceError::InvalidEvidence(err),
-                })
+                .verify_direct_message_is_invalid(round_id, format, payload, shared_data)
         }
     }
 }
@@ -387,7 +352,7 @@ impl InvalidEchoBroadcastEvidence {
         &self,
         verifier: &SP::Verifier,
         format: &BoxedFormat,
-        associated_data: &<P::ProtocolError as ProtocolError<SP::Verifier>>::AssociatedData,
+        shared_data: &P::SharedData,
     ) -> Result<(), EvidenceError>
     where
         P: Protocol<SP::Verifier>,
@@ -404,11 +369,7 @@ impl InvalidEchoBroadcastEvidence {
                 .ok_or_else(|| EvidenceError::InvalidEvidence(format!("{round_id} is not in the protocol")))?;
             round_info
                 .as_ref()
-                .verify_echo_broadcast_is_invalid(round_id, format, payload, associated_data)
-                .map_err(|err| match err {
-                    MessageValidationError::Local(err) => EvidenceError::Local(err),
-                    MessageValidationError::InvalidEvidence(err) => EvidenceError::InvalidEvidence(err),
-                })
+                .verify_echo_broadcast_is_invalid(round_id, format, payload, shared_data)
         }
     }
 }
@@ -421,7 +382,7 @@ impl InvalidNormalBroadcastEvidence {
         &self,
         verifier: &SP::Verifier,
         format: &BoxedFormat,
-        associated_data: &<P::ProtocolError as ProtocolError<SP::Verifier>>::AssociatedData,
+        shared_data: &P::SharedData,
     ) -> Result<(), EvidenceError>
     where
         P: Protocol<SP::Verifier>,
@@ -438,19 +399,15 @@ impl InvalidNormalBroadcastEvidence {
                 .ok_or_else(|| EvidenceError::InvalidEvidence(format!("{round_id} is not in the protocol")))?;
             round_info
                 .as_ref()
-                .verify_normal_broadcast_is_invalid(round_id, format, payload, associated_data)
-                .map_err(|err| match err {
-                    MessageValidationError::Local(err) => EvidenceError::Local(err),
-                    MessageValidationError::InvalidEvidence(err) => EvidenceError::InvalidEvidence(err),
-                })
+                .verify_normal_broadcast_is_invalid(round_id, format, payload, shared_data)
         }
     }
 }
 
 #[derive_where::derive_where(Debug)]
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct ProtocolEvidence<Id: Debug + Clone + Ord, P: Protocol<Id>> {
-    error: P::ProtocolError,
+    error: SerializedProvableError,
     direct_message: Option<SignedMessagePart<DirectMessage>>,
     echo_broadcast: Option<SignedMessagePart<EchoBroadcast>>,
     normal_broadcast: Option<SignedMessagePart<NormalBroadcast>>,
@@ -459,6 +416,7 @@ struct ProtocolEvidence<Id: Debug + Clone + Ord, P: Protocol<Id>> {
     normal_broadcasts: SerializableMap<RoundId, SignedMessagePart<NormalBroadcast>>,
     other_echo_broadcasts: SerializableMap<RoundId, SerializableMap<Id, SignedMessagePart<EchoBroadcast>>>,
     echo_hashes: SerializableMap<RoundId, SignedMessagePart<NormalBroadcast>>,
+    phantom: PhantomData<fn() -> P>,
 }
 
 fn verify_message_parts<SP, T>(
@@ -518,7 +476,7 @@ where
         &self,
         verifier: &SP::Verifier,
         format: &BoxedFormat,
-        associated_data: &<P::ProtocolError as ProtocolError<Id>>::AssociatedData,
+        shared_data: &P::SharedData,
     ) -> Result<(), EvidenceError>
     where
         SP: SessionParameters<Verifier = Id>,
@@ -631,14 +589,20 @@ where
             previous_messages.insert(round_id, protocol_message);
         }
 
-        Ok(self.error.verify_messages_constitute_error(
+        let round_info = P::round_info(round_id).ok_or_else(|| {
+            EvidenceError::InvalidEvidence(format!("The round {round_id} is not present in the protocol"))
+        })?;
+
+        round_info.as_ref().verify_evidence(
+            round_id,
             format,
+            &self.error,
             verifier,
             session_id.as_ref(),
-            associated_data,
+            shared_data,
             protocol_message,
             previous_messages,
             combined_echos,
-        )?)
+        )
     }
 }

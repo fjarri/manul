@@ -50,15 +50,19 @@ Usage:
 */
 
 use alloc::{boxed::Box, collections::BTreeMap, format};
-use core::fmt::{self, Debug};
+use core::fmt::Debug;
 
 use rand_core::CryptoRngCore;
 
-use crate::protocol::{
-    Artifact, BoxedFormat, BoxedRound, BoxedRoundInfo, CommunicationInfo, DirectMessage, EchoBroadcast, EntryPoint,
-    FinalizeOutcome, LocalError, MessageValidationError, NormalBroadcast, PartyId, Payload, Protocol, ProtocolError,
-    ProtocolMessage, ProtocolValidationError, ReceiveError, RequiredMessages, Round, RoundId, RoundInfo,
-    TransitionInfo,
+use crate::{
+    dyn_protocol::{
+        Artifact, BoxedFinalizeOutcome, BoxedFormat, BoxedReceiveError, BoxedRound, DirectMessage, DynRound,
+        EchoBroadcast, NormalBroadcast, Payload, ProtocolMessage, SerializedProvableError,
+    },
+    protocol::{
+        CommunicationInfo, DynRoundInfo, EntryPoint, EvidenceError, LocalError, PartyId, Protocol, RoundId, RoundInfo,
+        TransitionInfo,
+    },
 };
 
 /// A marker trait that is used to disambiguate blanket trait implementations for [`Protocol`] and [`EntryPoint`].
@@ -73,135 +77,116 @@ pub trait ChainedProtocol<Id>: 'static + Debug {
     type Protocol2: Protocol<Id>;
 }
 
-/// The protocol error type for the chained protocol.
-#[derive_where::derive_where(Debug, Clone, Serialize, Deserialize)]
-pub enum ChainedProtocolError<Id, C>
-where
-    C: ChainedProtocol<Id>,
-{
-    /// A protocol error from the first protocol.
-    Protocol1(<C::Protocol1 as Protocol<Id>>::ProtocolError),
-    /// A protocol error from the second protocol.
-    Protocol2(<C::Protocol2 as Protocol<Id>>::ProtocolError),
-}
-
-impl<Id, C> fmt::Display for ChainedProtocolError<Id, C>
-where
-    C: ChainedProtocol<Id>,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        match self {
-            Self::Protocol1(err) => write!(f, "Protocol 1: {err}"),
-            Self::Protocol2(err) => write!(f, "Protocol 2: {err}"),
-        }
-    }
-}
-
-impl<Id, C> ChainedProtocolError<Id, C>
-where
-    C: ChainedProtocol<Id>,
-{
-    fn from_protocol1(err: <C::Protocol1 as Protocol<Id>>::ProtocolError) -> Self {
-        Self::Protocol1(err)
-    }
-
-    fn from_protocol2(err: <C::Protocol2 as Protocol<Id>>::ProtocolError) -> Self {
-        Self::Protocol2(err)
-    }
-}
-
 /// Associated data for verification of malicious behavior evidence in the chained protocol.
-#[derive_where::derive_where(Debug)]
-pub struct ChainedAssociatedData<Id, C>
+pub struct ChainedSharedData<Id, C>
 where
     C: ChainedProtocol<Id>,
 {
     /// Associated data for the errors in the first protocol.
-    pub protocol1: <<C::Protocol1 as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
+    pub protocol1: <C::Protocol1 as Protocol<Id>>::SharedData,
     /// Associated data for the errors in the second protocol.
-    pub protocol2: <<C::Protocol2 as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
+    pub protocol2: <C::Protocol2 as Protocol<Id>>::SharedData,
 }
 
-impl<Id, C> ProtocolError<Id> for ChainedProtocolError<Id, C>
+#[derive_where::derive_where(Debug)]
+struct RoundInfoWrapper1<Id: 'static, P: ChainedProtocol<Id> + ChainedMarker>(RoundInfo<Id, P::Protocol1>);
+
+impl<Id, P> DynRoundInfo<Id> for RoundInfoWrapper1<Id, P>
 where
-    C: ChainedProtocol<Id>,
+    P: ChainedProtocol<Id> + ChainedMarker,
 {
-    type AssociatedData = ChainedAssociatedData<Id, C>;
+    type Protocol = P;
 
-    fn required_messages(&self) -> RequiredMessages {
-        let (protocol_num, required_messages) = match self {
-            Self::Protocol1(err) => (1, err.required_messages()),
-            Self::Protocol2(err) => (2, err.required_messages()),
-        };
-
-        let previous_rounds = required_messages.previous_rounds.map(|previous_rounds| {
-            previous_rounds
-                .into_iter()
-                .map(|(round_id, required)| (round_id.group_under(protocol_num), required))
-                .collect()
-        });
-
-        let combined_echos = required_messages.combined_echos.map(|combined_echos| {
-            combined_echos
-                .into_iter()
-                .map(|round_id| round_id.group_under(protocol_num))
-                .collect()
-        });
-
-        RequiredMessages {
-            this_round: required_messages.this_round,
-            previous_rounds,
-            combined_echos,
+    fn verify_direct_message_is_invalid(
+        &self,
+        round_id: &RoundId,
+        format: &BoxedFormat,
+        message: &DirectMessage,
+        shared_data: &<Self::Protocol as Protocol<Id>>::SharedData,
+    ) -> Result<(), EvidenceError> {
+        let (group, round_id) = round_id.split_group()?;
+        if group != 1 {
+            return Err(EvidenceError::Local(LocalError::new(format!(
+                "Expected round ID from group 1, got {round_id}"
+            ))));
         }
+        self.0
+            .as_ref()
+            .verify_direct_message_is_invalid(&round_id, format, message, &shared_data.protocol1)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn verify_messages_constitute_error(
+    fn verify_echo_broadcast_is_invalid(
         &self,
+        round_id: &RoundId,
         format: &BoxedFormat,
+        message: &EchoBroadcast,
+        shared_data: &<Self::Protocol as Protocol<Id>>::SharedData,
+    ) -> Result<(), EvidenceError> {
+        let (group, round_id) = round_id.split_group()?;
+        if group != 1 {
+            return Err(EvidenceError::Local(LocalError::new(format!(
+                "Expected round ID from group 1, got {round_id}"
+            ))));
+        }
+        self.0
+            .as_ref()
+            .verify_echo_broadcast_is_invalid(&round_id, format, message, &shared_data.protocol1)
+    }
+
+    fn verify_normal_broadcast_is_invalid(
+        &self,
+        round_id: &RoundId,
+        format: &BoxedFormat,
+        message: &NormalBroadcast,
+        shared_data: &<Self::Protocol as Protocol<Id>>::SharedData,
+    ) -> Result<(), EvidenceError> {
+        let (group, round_id) = round_id.split_group()?;
+        if group != 1 {
+            return Err(EvidenceError::Local(LocalError::new(format!(
+                "Expected round ID from group 1, got {round_id}"
+            ))));
+        }
+        self.0
+            .as_ref()
+            .verify_normal_broadcast_is_invalid(&round_id, format, message, &shared_data.protocol1)
+    }
+
+    fn verify_evidence(
+        &self,
+        round_id: &RoundId,
+        format: &BoxedFormat,
+        error: &SerializedProvableError,
         guilty_party: &Id,
         shared_randomness: &[u8],
-        associated_data: &Self::AssociatedData,
+        shared_data: &<Self::Protocol as Protocol<Id>>::SharedData,
         message: ProtocolMessage,
         previous_messages: BTreeMap<RoundId, ProtocolMessage>,
         combined_echos: BTreeMap<RoundId, BTreeMap<Id, EchoBroadcast>>,
-    ) -> Result<(), ProtocolValidationError> {
-        let previous_messages = previous_messages
-            .into_iter()
-            .map(|(round_id, message)| round_id.split_group().map(|(_group_num, round_id)| (round_id, message)))
-            .collect::<Result<BTreeMap<_, _>, _>>()?;
-        let combined_echos = combined_echos
-            .into_iter()
-            .map(|(round_id, message)| round_id.split_group().map(|(_group_num, round_id)| (round_id, message)))
-            .collect::<Result<BTreeMap<_, _>, _>>()?;
-
-        match self {
-            Self::Protocol1(err) => err.verify_messages_constitute_error(
-                format,
-                guilty_party,
-                shared_randomness,
-                &associated_data.protocol1,
-                message,
-                previous_messages,
-                combined_echos,
-            ),
-            Self::Protocol2(err) => err.verify_messages_constitute_error(
-                format,
-                guilty_party,
-                shared_randomness,
-                &associated_data.protocol2,
-                message,
-                previous_messages,
-                combined_echos,
-            ),
+    ) -> Result<(), EvidenceError> {
+        let (group, round_id) = round_id.split_group()?;
+        if group != 1 {
+            return Err(EvidenceError::Local(LocalError::new(format!(
+                "Expected round ID from group 1, got {round_id}"
+            ))));
         }
+        self.0.as_ref().verify_evidence(
+            &round_id,
+            format,
+            error,
+            guilty_party,
+            shared_randomness,
+            &shared_data.protocol1,
+            message,
+            previous_messages,
+            combined_echos,
+        )
     }
 }
 
 #[derive_where::derive_where(Debug)]
-struct RoundInfoWrapper1<Id: 'static, P: ChainedProtocol<Id> + ChainedMarker>(BoxedRoundInfo<Id, P::Protocol1>);
+struct RoundInfoWrapper2<Id: 'static, P: ChainedProtocol<Id> + ChainedMarker>(RoundInfo<Id, P::Protocol2>);
 
-impl<Id, P> RoundInfo<Id> for RoundInfoWrapper1<Id, P>
+impl<Id, P> DynRoundInfo<Id> for RoundInfoWrapper2<Id, P>
 where
     P: ChainedProtocol<Id> + ChainedMarker,
 {
@@ -212,17 +197,17 @@ where
         round_id: &RoundId,
         format: &BoxedFormat,
         message: &DirectMessage,
-        associated_data: &<<Self::Protocol as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
-    ) -> Result<(), MessageValidationError> {
+        shared_data: &<Self::Protocol as Protocol<Id>>::SharedData,
+    ) -> Result<(), EvidenceError> {
         let (group, round_id) = round_id.split_group()?;
-        if group != 1 {
-            return Err(MessageValidationError::Local(LocalError::new(format!(
-                "Expected round ID from group 1, got {round_id}"
+        if group != 2 {
+            return Err(EvidenceError::Local(LocalError::new(format!(
+                "Expected round ID from group 2, got {round_id}"
             ))));
         }
         self.0
             .as_ref()
-            .verify_direct_message_is_invalid(&round_id, format, message, &associated_data.protocol1)
+            .verify_direct_message_is_invalid(&round_id, format, message, &shared_data.protocol2)
     }
 
     fn verify_echo_broadcast_is_invalid(
@@ -230,17 +215,17 @@ where
         round_id: &RoundId,
         format: &BoxedFormat,
         message: &EchoBroadcast,
-        associated_data: &<<Self::Protocol as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
-    ) -> Result<(), MessageValidationError> {
+        shared_data: &<Self::Protocol as Protocol<Id>>::SharedData,
+    ) -> Result<(), EvidenceError> {
         let (group, round_id) = round_id.split_group()?;
-        if group != 1 {
-            return Err(MessageValidationError::Local(LocalError::new(format!(
-                "Expected round ID from group 1, got {round_id}"
+        if group != 2 {
+            return Err(EvidenceError::Local(LocalError::new(format!(
+                "Expected round ID from group 2, got {round_id}"
             ))));
         }
         self.0
             .as_ref()
-            .verify_echo_broadcast_is_invalid(&round_id, format, message, &associated_data.protocol1)
+            .verify_echo_broadcast_is_invalid(&round_id, format, message, &shared_data.protocol2)
     }
 
     fn verify_normal_broadcast_is_invalid(
@@ -248,81 +233,48 @@ where
         round_id: &RoundId,
         format: &BoxedFormat,
         message: &NormalBroadcast,
-        associated_data: &<<Self::Protocol as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
-    ) -> Result<(), MessageValidationError> {
+        shared_data: &<Self::Protocol as Protocol<Id>>::SharedData,
+    ) -> Result<(), EvidenceError> {
         let (group, round_id) = round_id.split_group()?;
-        if group != 1 {
-            return Err(MessageValidationError::Local(LocalError::new(format!(
+        if group != 2 {
+            return Err(EvidenceError::Local(LocalError::new(format!(
+                "Expected round ID from group 2, got {round_id}"
+            ))));
+        }
+        self.0
+            .as_ref()
+            .verify_normal_broadcast_is_invalid(&round_id, format, message, &shared_data.protocol2)
+    }
+
+    fn verify_evidence(
+        &self,
+        round_id: &RoundId,
+        format: &BoxedFormat,
+        error: &SerializedProvableError,
+        guilty_party: &Id,
+        shared_randomness: &[u8],
+        shared_data: &<Self::Protocol as Protocol<Id>>::SharedData,
+        message: ProtocolMessage,
+        previous_messages: BTreeMap<RoundId, ProtocolMessage>,
+        combined_echos: BTreeMap<RoundId, BTreeMap<Id, EchoBroadcast>>,
+    ) -> Result<(), EvidenceError> {
+        let (group, round_id) = round_id.split_group()?;
+        if group != 2 {
+            return Err(EvidenceError::Local(LocalError::new(format!(
                 "Expected round ID from group 1, got {round_id}"
             ))));
         }
-        self.0
-            .as_ref()
-            .verify_normal_broadcast_is_invalid(&round_id, format, message, &associated_data.protocol1)
-    }
-}
-
-#[derive_where::derive_where(Debug)]
-struct RoundInfoWrapper2<Id: 'static, P: ChainedProtocol<Id> + ChainedMarker>(BoxedRoundInfo<Id, P::Protocol2>);
-
-impl<Id, P> RoundInfo<Id> for RoundInfoWrapper2<Id, P>
-where
-    P: ChainedProtocol<Id> + ChainedMarker,
-{
-    type Protocol = P;
-
-    fn verify_direct_message_is_invalid(
-        &self,
-        round_id: &RoundId,
-        format: &BoxedFormat,
-        message: &DirectMessage,
-        associated_data: &<<Self::Protocol as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
-    ) -> Result<(), MessageValidationError> {
-        let (group, round_id) = round_id.split_group()?;
-        if group != 2 {
-            return Err(MessageValidationError::Local(LocalError::new(format!(
-                "Expected round ID from group 2, got {round_id}"
-            ))));
-        }
-        self.0
-            .as_ref()
-            .verify_direct_message_is_invalid(&round_id, format, message, &associated_data.protocol2)
-    }
-
-    fn verify_echo_broadcast_is_invalid(
-        &self,
-        round_id: &RoundId,
-        format: &BoxedFormat,
-        message: &EchoBroadcast,
-        associated_data: &<<Self::Protocol as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
-    ) -> Result<(), MessageValidationError> {
-        let (group, round_id) = round_id.split_group()?;
-        if group != 2 {
-            return Err(MessageValidationError::Local(LocalError::new(format!(
-                "Expected round ID from group 2, got {round_id}"
-            ))));
-        }
-        self.0
-            .as_ref()
-            .verify_echo_broadcast_is_invalid(&round_id, format, message, &associated_data.protocol2)
-    }
-
-    fn verify_normal_broadcast_is_invalid(
-        &self,
-        round_id: &RoundId,
-        format: &BoxedFormat,
-        message: &NormalBroadcast,
-        associated_data: &<<Self::Protocol as Protocol<Id>>::ProtocolError as ProtocolError<Id>>::AssociatedData,
-    ) -> Result<(), MessageValidationError> {
-        let (group, round_id) = round_id.split_group()?;
-        if group != 2 {
-            return Err(MessageValidationError::Local(LocalError::new(format!(
-                "Expected round ID from group 2, got {round_id}"
-            ))));
-        }
-        self.0
-            .as_ref()
-            .verify_normal_broadcast_is_invalid(&round_id, format, message, &associated_data.protocol2)
+        self.0.as_ref().verify_evidence(
+            &round_id,
+            format,
+            error,
+            guilty_party,
+            shared_randomness,
+            &shared_data.protocol2,
+            message,
+            previous_messages,
+            combined_echos,
+        )
     }
 }
 
@@ -332,16 +284,16 @@ where
     C: ChainedProtocol<Id> + ChainedMarker,
 {
     type Result = <C::Protocol2 as Protocol<Id>>::Result;
-    type ProtocolError = ChainedProtocolError<Id, C>;
+    type SharedData = ChainedSharedData<Id, C>;
 
-    fn round_info(round_id: &RoundId) -> Option<BoxedRoundInfo<Id, Self>> {
+    fn round_info(round_id: &RoundId) -> Option<RoundInfo<Id, Self>> {
         let (group, round_id) = round_id.split_group().ok()?;
         if group == 1 {
             let round_info = C::Protocol1::round_info(&round_id)?;
-            Some(BoxedRoundInfo::new_obj(Box::new(RoundInfoWrapper1(round_info))))
+            Some(RoundInfo::new_obj(RoundInfoWrapper1(round_info)))
         } else if group == 2 {
             let round_info = C::Protocol2::round_info(&round_id)?;
-            Some(BoxedRoundInfo::new_obj(Box::new(RoundInfoWrapper2(round_info))))
+            Some(RoundInfo::new_obj(RoundInfoWrapper2(round_info)))
         } else {
             None
         }
@@ -433,7 +385,7 @@ where
     Protocol2(BoxedRound<Id, <T::Protocol as ChainedProtocol<Id>>::Protocol2>),
 }
 
-impl<Id, T> Round<Id> for ChainedRound<Id, T>
+impl<Id, T> DynRound<Id> for ChainedRound<Id, T>
 where
     Id: PartyId,
     T: ChainedJoin<Id>,
@@ -500,16 +452,16 @@ where
         format: &BoxedFormat,
         from: &Id,
         message: ProtocolMessage,
-    ) -> Result<Payload, ReceiveError<Id, Self::Protocol>> {
+    ) -> Result<Payload, BoxedReceiveError<Id>> {
         match &self.state {
-            ChainState::Protocol1 { round, .. } => match round.as_ref().receive_message(format, from, message) {
-                Ok(payload) => Ok(payload),
-                Err(err) => Err(err.map(ChainedProtocolError::from_protocol1)),
-            },
-            ChainState::Protocol2(round) => match round.as_ref().receive_message(format, from, message) {
-                Ok(payload) => Ok(payload),
-                Err(err) => Err(err.map(ChainedProtocolError::from_protocol2)),
-            },
+            ChainState::Protocol1 { round, .. } => round
+                .as_ref()
+                .receive_message(format, from, message)
+                .map_err(|error| error.group_under(1)),
+            ChainState::Protocol2(round) => round
+                .as_ref()
+                .receive_message(format, from, message)
+                .map_err(|error| error.group_under(2)),
         }
     }
 
@@ -518,7 +470,7 @@ where
         rng: &mut dyn CryptoRngCore,
         payloads: BTreeMap<Id, Payload>,
         artifacts: BTreeMap<Id, Artifact>,
-    ) -> Result<FinalizeOutcome<Id, Self::Protocol>, LocalError> {
+    ) -> Result<BoxedFinalizeOutcome<Id, Self::Protocol>, LocalError> {
         match self.state {
             ChainState::Protocol1 {
                 id,
@@ -526,15 +478,17 @@ where
                 transition,
                 shared_randomness,
             } => match round.into_boxed().finalize(rng, payloads, artifacts)? {
-                FinalizeOutcome::Result(result) => {
+                BoxedFinalizeOutcome::Result(result) => {
                     let entry_point2 = transition.make_entry_point2(result);
                     let round = entry_point2.make_round(rng, &shared_randomness, &id)?;
                     let chained_round = ChainedRound::<Id, T> {
                         state: ChainState::Protocol2(round),
                     };
-                    Ok(FinalizeOutcome::AnotherRound(BoxedRound::new_dynamic(chained_round)))
+                    Ok(BoxedFinalizeOutcome::AnotherRound(BoxedRound::new_dynamic(
+                        chained_round,
+                    )))
                 }
-                FinalizeOutcome::AnotherRound(round) => {
+                BoxedFinalizeOutcome::AnotherRound(round) => {
                     let chained_round = ChainedRound::<Id, T> {
                         state: ChainState::Protocol1 {
                             id,
@@ -543,16 +497,20 @@ where
                             transition,
                         },
                     };
-                    Ok(FinalizeOutcome::AnotherRound(BoxedRound::new_dynamic(chained_round)))
+                    Ok(BoxedFinalizeOutcome::AnotherRound(BoxedRound::new_dynamic(
+                        chained_round,
+                    )))
                 }
             },
             ChainState::Protocol2(round) => match round.into_boxed().finalize(rng, payloads, artifacts)? {
-                FinalizeOutcome::Result(result) => Ok(FinalizeOutcome::Result(result)),
-                FinalizeOutcome::AnotherRound(round) => {
+                BoxedFinalizeOutcome::Result(result) => Ok(BoxedFinalizeOutcome::Result(result)),
+                BoxedFinalizeOutcome::AnotherRound(round) => {
                     let chained_round = ChainedRound::<Id, T> {
                         state: ChainState::Protocol2(round),
                     };
-                    Ok(FinalizeOutcome::AnotherRound(BoxedRound::new_dynamic(chained_round)))
+                    Ok(BoxedFinalizeOutcome::AnotherRound(BoxedRound::new_dynamic(
+                        chained_round,
+                    )))
                 }
             },
         }

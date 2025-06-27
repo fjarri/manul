@@ -209,17 +209,15 @@ where
         states.insert(verifier, state);
     }
 
-    let messages_len = messages.len();
     loop {
         // Pick a random message and deliver it
         let message = messages.pop(rng);
 
         debug!(
-            "Delivering message from {:?} to {:?} ({}/{})",
+            "Delivering message from {:?} to {:?} ({} more in the queue)",
             message.from,
             message.to,
-            messages_len - messages.len(),
-            messages_len
+            messages.len(),
         );
         let state = states.remove(&message.to);
         if state.is_none() {

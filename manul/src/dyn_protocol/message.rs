@@ -1,40 +1,34 @@
-use alloc::string::{String, ToString};
+use alloc::{
+    boxed::Box,
+    string::{String, ToString},
+};
 
 use digest::Digest;
 use serde::{Deserialize, Serialize};
+use serde_encoded_bytes::{Base64, SliceLike};
 
-use super::{
-    errors::{DirectMessageError, EchoBroadcastError, LocalError, MessageValidationError, NormalBroadcastError},
-    BoxedFormat,
-};
+use super::format::BoxedFormat;
+use crate::protocol::{EvidenceError, LocalError};
 
-mod private {
-    use alloc::boxed::Box;
-    use serde::{Deserialize, Serialize};
-    use serde_encoded_bytes::{Base64, SliceLike};
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct MessagePayload(#[serde(with = "SliceLike::<Base64>")] pub Box<[u8]>);
 
-    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-    pub struct MessagePayload(#[serde(with = "SliceLike::<Base64>")] pub Box<[u8]>);
-
-    impl AsRef<[u8]> for MessagePayload {
-        fn as_ref(&self) -> &[u8] {
-            &self.0
-        }
-    }
-
-    pub trait ProtocolMessageWrapper: Sized {
-        fn new_inner(maybe_message: Option<MessagePayload>) -> Self;
-        fn maybe_message(&self) -> &Option<MessagePayload>;
+impl AsRef<[u8]> for MessagePayload {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
     }
 }
 
-use private::{MessagePayload, ProtocolMessageWrapper};
+pub(crate) trait ProtocolMessageWrapper: Sized {
+    fn new_inner(maybe_message: Option<MessagePayload>) -> Self;
+    fn maybe_message(&self) -> &Option<MessagePayload>;
+}
 
 /// A serialized part of the protocol message.
 ///
 /// These would usually be generated separately by the round, but delivered together to
 /// [`Round::receive_message`](`crate::protocol::Round::receive_message`).
-pub trait ProtocolMessagePart: ProtocolMessageWrapper {
+pub(crate) trait ProtocolMessagePart: ProtocolMessageWrapper {
     /// The error specific to deserializing this message.
     ///
     /// Used to distinguish which deserialization failed in
@@ -79,11 +73,11 @@ pub trait ProtocolMessagePart: ProtocolMessageWrapper {
     /// This is intended to be used in the implementations of
     /// [`Protocol::verify_direct_message_is_invalid`](`crate::protocol::Protocol::verify_direct_message_is_invalid`) or
     /// [`Protocol::verify_echo_broadcast_is_invalid`](`crate::protocol::Protocol::verify_echo_broadcast_is_invalid`).
-    fn verify_is_not<'de, T: Deserialize<'de>>(&'de self, format: &BoxedFormat) -> Result<(), MessageValidationError> {
+    fn verify_is_not<'de, T: Deserialize<'de>>(&'de self, format: &BoxedFormat) -> Result<(), EvidenceError> {
         if self.deserialize::<T>(format).is_err() {
             Ok(())
         } else {
-            Err(MessageValidationError::InvalidEvidence(
+            Err(EvidenceError::InvalidEvidence(
                 "Message deserialized successfully, as expected by the protocol".into(),
             ))
         }
@@ -94,11 +88,11 @@ pub trait ProtocolMessagePart: ProtocolMessageWrapper {
     /// This is intended to be used in the implementations of
     /// [`Protocol::verify_direct_message_is_invalid`](`crate::protocol::Protocol::verify_direct_message_is_invalid`) or
     /// [`Protocol::verify_echo_broadcast_is_invalid`](`crate::protocol::Protocol::verify_echo_broadcast_is_invalid`).
-    fn verify_is_some(&self) -> Result<(), MessageValidationError> {
+    fn verify_is_some(&self) -> Result<(), EvidenceError> {
         if self.maybe_message().is_some() {
             Ok(())
         } else {
-            Err(MessageValidationError::InvalidEvidence(
+            Err(EvidenceError::InvalidEvidence(
                 "The payload is `None`, as expected by the protocol".into(),
             ))
         }
@@ -155,7 +149,7 @@ impl<T: ProtocolMessagePart + HasPartKind> ProtocolMessagePartHashable for T {}
 
 /// A serialized direct message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DirectMessage(Option<MessagePayload>);
+pub(crate) struct DirectMessage(Option<MessagePayload>);
 
 impl ProtocolMessageWrapper for DirectMessage {
     fn new_inner(maybe_message: Option<MessagePayload>) -> Self {
@@ -177,7 +171,7 @@ impl ProtocolMessagePart for DirectMessage {
 
 /// A serialized echo broadcast.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EchoBroadcast(Option<MessagePayload>);
+pub(crate) struct EchoBroadcast(Option<MessagePayload>);
 
 impl ProtocolMessageWrapper for EchoBroadcast {
     fn new_inner(maybe_message: Option<MessagePayload>) -> Self {
@@ -199,7 +193,7 @@ impl ProtocolMessagePart for EchoBroadcast {
 
 /// A serialized regular (non-echo) broadcast.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NormalBroadcast(Option<MessagePayload>);
+pub(crate) struct NormalBroadcast(Option<MessagePayload>);
 
 impl ProtocolMessageWrapper for NormalBroadcast {
     fn new_inner(maybe_message: Option<MessagePayload>) -> Self {
@@ -221,11 +215,44 @@ impl ProtocolMessagePart for NormalBroadcast {
 
 /// A bundle containing the message parts for one round.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProtocolMessage {
+pub(crate) struct ProtocolMessage {
     /// The echo-broadcased message part.
     pub echo_broadcast: EchoBroadcast,
     /// The message part broadcasted without additional verification.
     pub normal_broadcast: NormalBroadcast,
     /// The message part sent directly to one node.
     pub direct_message: DirectMessage,
+}
+
+/// An error during deserialization of a direct message.
+#[derive(displaydoc::Display, Debug, Clone)]
+#[displaydoc("Direct message error: {0}")]
+pub(crate) struct DirectMessageError(String);
+
+impl From<String> for DirectMessageError {
+    fn from(message: String) -> Self {
+        Self(message)
+    }
+}
+
+/// An error during deserialization of an echo broadcast.
+#[derive(displaydoc::Display, Debug, Clone)]
+#[displaydoc("Echo broadcast error: {0}")]
+pub(crate) struct EchoBroadcastError(String);
+
+impl From<String> for EchoBroadcastError {
+    fn from(message: String) -> Self {
+        Self(message)
+    }
+}
+
+/// An error during deserialization of a normal broadcast.
+#[derive(displaydoc::Display, Debug, Clone)]
+#[displaydoc("Normal broadcast error: {0}")]
+pub(crate) struct NormalBroadcastError(String);
+
+impl From<String> for NormalBroadcastError {
+    fn from(message: String) -> Self {
+        Self(message)
+    }
 }

@@ -11,33 +11,22 @@ to be executed by a [`Session`](`crate::session::Session`).
 For more details, see the documentation of the mentioned traits.
 */
 
-mod boxed_format;
-mod boxed_round;
 mod errors;
-mod message;
+mod evidence;
 mod round;
 mod round_id;
 mod round_info;
-mod static_round;
 
-pub use boxed_format::BoxedFormat;
-pub use boxed_round::BoxedRound;
-pub use errors::{
-    DeserializationError, DirectMessageError, EchoBroadcastError, LocalError, MessageValidationError,
-    NormalBroadcastError, ProtocolValidationError, ReceiveError, RemoteError,
+pub use errors::{LocalError, ReceiveError, RemoteError};
+pub use evidence::{
+    EvidenceError, EvidenceMessages, NoProvableErrors, ProvableError, RequiredMessageParts, RequiredMessages,
 };
-pub use message::{DirectMessage, EchoBroadcast, NormalBroadcast, ProtocolMessage, ProtocolMessagePart};
 pub use round::{
-    Artifact, CommunicationInfo, EchoRoundParticipation, EntryPoint, FinalizeOutcome, NoProtocolErrors, PartyId,
-    Payload, Protocol, ProtocolError, RequiredMessageParts, RequiredMessages, Round,
+    CommunicationInfo, EchoRoundParticipation, EntryPoint, FinalizeOutcome, MessageParts, NoMessage, PartyId, Protocol,
+    Round,
 };
 pub use round_id::{RoundId, TransitionInfo};
-pub use round_info::BoxedRoundInfo;
-pub use static_round::{
-    EvidenceMessages, NoMessage, NoProvableErrors, ProvableError, StaticProtocolMessage, StaticRound,
-};
+pub use round_info::RoundInfo;
 
-pub(crate) use errors::ReceiveErrorType;
-pub(crate) use message::ProtocolMessagePartHashable;
-pub(crate) use round_info::RoundInfo;
-pub(crate) use static_round::StaticRoundAdapter;
+pub use crate::dyn_protocol::BoxedRound;
+pub(crate) use round_info::DynRoundInfo;

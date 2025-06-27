@@ -3,8 +3,10 @@ use core::{fmt::Debug, marker::PhantomData};
 
 use serde::{Deserialize, Serialize};
 
-use super::errors::{DeserializationError, LocalError};
-use crate::session::WireFormat;
+use crate::{
+    protocol::LocalError,
+    session::{DeserializationError, WireFormat},
+};
 
 trait ObjectSafeSerializer: Debug {
     fn serialize(&self, value: Box<dyn erased_serde::Serialize>) -> Result<Box<[u8]>, LocalError>;
@@ -40,13 +42,13 @@ where
 
 /// A serializer/deserializer for protocol messages.
 #[derive(Debug)]
-pub struct BoxedFormat {
+pub(crate) struct BoxedFormat {
     serializer: Box<dyn ObjectSafeSerializer + Send + Sync>,
     deserializer_factory: Box<dyn ObjectSafeDeserializerFactory + Send + Sync>,
 }
 
 impl BoxedFormat {
-    pub(crate) fn new<F: WireFormat>() -> Self {
+    pub fn new<F: WireFormat>() -> Self {
         Self {
             serializer: Box::new(SerializerWrapper::<F>(PhantomData)),
             deserializer_factory: Box::new(DeserializerFactoryWrapper::<F>(PhantomData)),
@@ -54,7 +56,7 @@ impl BoxedFormat {
     }
 
     /// Serializes a `serde`-serializable object.
-    pub(crate) fn serialize<T>(&self, value: T) -> Result<Box<[u8]>, LocalError>
+    pub fn serialize<T>(&self, value: T) -> Result<Box<[u8]>, LocalError>
     where
         T: 'static + Serialize,
     {
@@ -63,13 +65,13 @@ impl BoxedFormat {
     }
 
     /// Deserializes a `serde`-deserializable object.
-    pub(crate) fn deserialize<'de, T>(&self, bytes: &'de [u8]) -> Result<T, DeserializationError>
+    pub fn deserialize<'de, T>(&self, bytes: &'de [u8]) -> Result<T, DeserializationError>
     where
         T: Deserialize<'de>,
     {
         let mut deserializer = self.deserializer_factory.make_erased_deserializer(bytes);
         erased_serde::deserialize::<T>(&mut deserializer)
-            .map_err(|err| DeserializationError::new(format!("Deserialization error: {err:?}")))
+            .map_err(|err| DeserializationError::new::<T>(format!("{err:?}")))
     }
 }
 

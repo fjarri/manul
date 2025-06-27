@@ -1,26 +1,28 @@
-#![allow(missing_docs, unused_variables, missing_debug_implementations)]
-
-use alloc::{boxed::Box, collections::BTreeMap};
+use alloc::{boxed::Box, collections::BTreeMap, string::String};
 use core::{any::TypeId, fmt::Debug};
 
 use dyn_clone::DynClone;
 use rand_core::CryptoRngCore;
 
-use crate::protocol::{
-    Artifact, BoxedFormat, BoxedRound, CommunicationInfo, DirectMessage, EchoBroadcast, EntryPoint, EvidenceMessages,
-    FinalizeOutcome, LocalError, NormalBroadcast, PartyId, Payload, Protocol, ProtocolMessage, ProtocolValidationError,
-    ProvableError, ReceiveError, RequiredMessages, Round, RoundId, StaticProtocolMessage, StaticRound,
-    StaticRoundAdapter, TransitionInfo,
+use crate::{
+    dyn_protocol::{
+        Artifact, BoxedFinalizeOutcome, BoxedFormat, BoxedReceiveError, BoxedRound, DirectMessage, DynRound,
+        EchoBroadcast, NormalBroadcast, Payload, ProtocolMessage, RoundWrapper,
+    },
+    protocol::{
+        CommunicationInfo, EntryPoint, EvidenceError, EvidenceMessages, FinalizeOutcome, LocalError, MessageParts,
+        PartyId, Protocol, ProvableError, ReceiveError, RequiredMessages, Round, RoundId, TransitionInfo,
+    },
 };
 
 pub trait Extension<Id>: 'static + Debug + Send + Sync + Clone {
-    type Round: StaticRound<Id>;
+    type Round: Round<Id>;
 
     fn extend_normal_broadcast(
         &self,
         rng: &mut dyn CryptoRngCore,
         round: &Self::Round,
-    ) -> Result<Option<<Self::Round as StaticRound<Id>>::NormalBroadcast>, LocalError> {
+    ) -> Result<Option<<Self::Round as Round<Id>>::NormalBroadcast>, LocalError> {
         round.make_normal_broadcast(rng)
     }
 
@@ -28,10 +30,11 @@ pub trait Extension<Id>: 'static + Debug + Send + Sync + Clone {
         &self,
         rng: &mut dyn CryptoRngCore,
         round: &Self::Round,
-    ) -> Result<Option<<Self::Round as StaticRound<Id>>::EchoBroadcast>, LocalError> {
+    ) -> Result<Option<<Self::Round as Round<Id>>::EchoBroadcast>, LocalError> {
         round.make_echo_broadcast(rng)
     }
 
+    #[allow(clippy::type_complexity)]
     fn extend_direct_message(
         &self,
         rng: &mut dyn CryptoRngCore,
@@ -39,8 +42,8 @@ pub trait Extension<Id>: 'static + Debug + Send + Sync + Clone {
         destination: &Id,
     ) -> Result<
         Option<(
-            <Self::Round as StaticRound<Id>>::DirectMessage,
-            <Self::Round as StaticRound<Id>>::Artifact,
+            <Self::Round as Round<Id>>::DirectMessage,
+            <Self::Round as Round<Id>>::Artifact,
         )>,
         LocalError,
     > {
@@ -51,30 +54,35 @@ pub trait Extension<Id>: 'static + Debug + Send + Sync + Clone {
         &self,
         rng: &mut dyn CryptoRngCore,
         round: Self::Round,
-        payloads: BTreeMap<Id, <Self::Round as StaticRound<Id>>::Payload>,
-        artifacts: BTreeMap<Id, <Self::Round as StaticRound<Id>>::Artifact>,
-    ) -> Result<FinalizeOutcome<Id, <Self::Round as StaticRound<Id>>::Protocol>, LocalError> {
+        payloads: BTreeMap<Id, <Self::Round as Round<Id>>::Payload>,
+        artifacts: BTreeMap<Id, <Self::Round as Round<Id>>::Artifact>,
+    ) -> Result<FinalizeOutcome<Id, <Self::Round as Round<Id>>::Protocol>, LocalError> {
         round.finalize(rng, payloads, artifacts)
     }
 }
 
 #[derive_where::derive_where(Debug, Clone, Serialize, Deserialize)]
-struct ExtendedProvableError<Id, Ext: Extension<Id>>(<Ext::Round as StaticRound<Id>>::ProvableError);
+struct ExtendedProvableError<Id, Ext: Extension<Id>>(<Ext::Round as Round<Id>>::ProvableError);
 
 impl<Id: PartyId, Ext: Extension<Id>> ProvableError<Id> for ExtendedProvableError<Id, Ext> {
     type Round = ExtendedRound<Id, Ext>;
-    fn required_previous_messages(&self) -> RequiredMessages {
-        self.0.required_previous_messages()
+    fn required_messages(&self, round_id: &RoundId) -> RequiredMessages {
+        self.0.required_messages(round_id)
     }
     fn verify_evidence(
         &self,
+        round_id: &RoundId,
         from: &Id,
         shared_randomness: &[u8],
-        shared_data: &<<Self::Round as StaticRound<Id>>::Protocol as Protocol<Id>>::SharedData,
-        messages: EvidenceMessages<Id, Self::Round>,
-    ) -> Result<(), ProtocolValidationError> {
+        shared_data: &<<Self::Round as Round<Id>>::Protocol as Protocol<Id>>::SharedData,
+        messages: EvidenceMessages<'_, Id, Self::Round>,
+    ) -> Result<(), EvidenceError> {
         let messages = messages.into_round::<Ext::Round>();
-        self.0.verify_evidence(from, shared_randomness, shared_data, messages)
+        self.0
+            .verify_evidence(round_id, from, shared_randomness, shared_data, messages)
+    }
+    fn description(&self) -> String {
+        self.0.description()
     }
 }
 
@@ -83,23 +91,23 @@ impl<Id: PartyId, Ext: Extension<Id>> ProvableError<Id> for ExtendedProvableErro
 struct ExtendedRound<Id, Ext: Extension<Id>> {
     round: Ext::Round,
     extension: Ext,
-    extensions: BTreeMap<TypeId, Box<dyn DynExtension<Id, <Ext::Round as StaticRound<Id>>::Protocol>>>,
+    extensions: BTreeMap<TypeId, Box<dyn DynExtension<Id, <Ext::Round as Round<Id>>::Protocol>>>,
 }
 
-impl<Id, Ext> StaticRound<Id> for ExtendedRound<Id, Ext>
+impl<Id, Ext> Round<Id> for ExtendedRound<Id, Ext>
 where
     Id: PartyId,
     Ext: Extension<Id>,
 {
-    type Protocol = <Ext::Round as StaticRound<Id>>::Protocol;
+    type Protocol = <Ext::Round as Round<Id>>::Protocol;
     type ProvableError = ExtendedProvableError<Id, Ext>;
 
-    type DirectMessage = <Ext::Round as StaticRound<Id>>::DirectMessage;
-    type NormalBroadcast = <Ext::Round as StaticRound<Id>>::NormalBroadcast;
-    type EchoBroadcast = <Ext::Round as StaticRound<Id>>::EchoBroadcast;
+    type DirectMessage = <Ext::Round as Round<Id>>::DirectMessage;
+    type NormalBroadcast = <Ext::Round as Round<Id>>::NormalBroadcast;
+    type EchoBroadcast = <Ext::Round as Round<Id>>::EchoBroadcast;
 
-    type Payload = <Ext::Round as StaticRound<Id>>::Payload;
-    type Artifact = <Ext::Round as StaticRound<Id>>::Artifact;
+    type Payload = <Ext::Round as Round<Id>>::Payload;
+    type Artifact = <Ext::Round as Round<Id>>::Artifact;
 
     fn transition_info(&self) -> TransitionInfo {
         self.round.transition_info()
@@ -112,16 +120,18 @@ where
     fn receive_message(
         &self,
         from: &Id,
-        message: StaticProtocolMessage<Id, Self>,
-    ) -> Result<<Self as StaticRound<Id>>::Payload, ReceiveError<Id, <Self as StaticRound<Id>>::Protocol>> {
-        self.round.receive_message(
-            from,
-            StaticProtocolMessage {
-                echo_broadcast: message.echo_broadcast,
-                normal_broadcast: message.normal_broadcast,
-                direct_message: message.direct_message,
-            },
-        )
+        message: MessageParts<Id, Self>,
+    ) -> Result<Self::Payload, ReceiveError<Id, Self>> {
+        self.round
+            .receive_message(
+                from,
+                MessageParts {
+                    echo_broadcast: message.echo_broadcast,
+                    normal_broadcast: message.normal_broadcast,
+                    direct_message: message.direct_message,
+                },
+            )
+            .map_err(|error| error.map::<Self, _>(ExtendedProvableError))
     }
 
     fn make_normal_broadcast(&self, rng: &mut dyn CryptoRngCore) -> Result<Option<Self::NormalBroadcast>, LocalError> {
@@ -171,23 +181,23 @@ impl<Ext> ExtensionWrapper<Ext> {
     }
 }
 
-impl<Id, Ext> DynExtension<Id, <Ext::Round as StaticRound<Id>>::Protocol> for ExtensionWrapper<Ext>
+impl<Id, Ext> DynExtension<Id, <Ext::Round as Round<Id>>::Protocol> for ExtensionWrapper<Ext>
 where
     Id: PartyId,
     Ext: Extension<Id>,
 {
     fn extend_round(
         self: Box<Self>,
-        round: BoxedRound<Id, <Ext::Round as StaticRound<Id>>::Protocol>,
-        extensions: BTreeMap<TypeId, Box<dyn DynExtension<Id, <Ext::Round as StaticRound<Id>>::Protocol>>>,
-    ) -> Option<BoxedRound<Id, <Ext::Round as StaticRound<Id>>::Protocol>> {
-        let typed_round = round.downcast_static::<Ext::Round>().ok()?;
+        round: BoxedRound<Id, <Ext::Round as Round<Id>>::Protocol>,
+        extensions: BTreeMap<TypeId, Box<dyn DynExtension<Id, <Ext::Round as Round<Id>>::Protocol>>>,
+    ) -> Option<BoxedRound<Id, <Ext::Round as Round<Id>>::Protocol>> {
+        let typed_round = round.downcast::<Ext::Round>().ok()?;
         let extended_round = ExtendedRound::<Id, Ext> {
             round: typed_round,
             extension: (*self).0,
             extensions,
         };
-        Some(BoxedRound::new_static(extended_round))
+        Some(BoxedRound::new(extended_round))
     }
 }
 
@@ -197,7 +207,7 @@ struct PassthroughRound<Id, P: Protocol<Id>> {
     extensions: BTreeMap<TypeId, Box<dyn DynExtension<Id, P>>>,
 }
 
-impl<Id, P> Round<Id> for PassthroughRound<Id, P>
+impl<Id, P> DynRound<Id> for PassthroughRound<Id, P>
 where
     Id: PartyId,
     P: Protocol<Id>,
@@ -209,11 +219,13 @@ where
         rng: &mut dyn CryptoRngCore,
         payloads: BTreeMap<Id, Payload>,
         artifacts: BTreeMap<Id, Artifact>,
-    ) -> Result<FinalizeOutcome<Id, Self::Protocol>, LocalError> {
+    ) -> Result<BoxedFinalizeOutcome<Id, Self::Protocol>, LocalError> {
         let outcome = self.round.into_boxed().finalize(rng, payloads, artifacts)?;
         Ok(match outcome {
-            FinalizeOutcome::Result(result) => FinalizeOutcome::Result(result),
-            FinalizeOutcome::AnotherRound(round) => FinalizeOutcome::AnotherRound(wrap_round(round, self.extensions)),
+            BoxedFinalizeOutcome::Result(result) => BoxedFinalizeOutcome::Result(result),
+            BoxedFinalizeOutcome::AnotherRound(round) => {
+                BoxedFinalizeOutcome::AnotherRound(wrap_round(round, self.extensions))
+            }
         })
     }
 
@@ -255,7 +267,7 @@ where
         format: &BoxedFormat,
         from: &Id,
         message: ProtocolMessage,
-    ) -> Result<Payload, ReceiveError<Id, Self::Protocol>> {
+    ) -> Result<Payload, BoxedReceiveError<Id>> {
         self.round.as_ref().receive_message(format, from, message)
     }
 }
@@ -274,8 +286,6 @@ fn wrap_round<Id: PartyId, P: Protocol<Id>>(
         BoxedRound::new_dynamic(PassthroughRound { round, extensions })
     }
 }
-
-////////
 
 pub struct Extendable<Id: PartyId, EP: EntryPoint<Id>> {
     entry_point: EP,
@@ -296,7 +306,7 @@ where
 
     pub fn with_extension<Ext: Extension<Id>>(self, extension: Ext) -> Self
     where
-        Ext::Round: StaticRound<Id, Protocol = EP::Protocol>,
+        Ext::Round: Round<Id, Protocol = EP::Protocol>,
     {
         let mut entry_point = self;
         entry_point.extend(extension);
@@ -305,9 +315,9 @@ where
 
     pub fn extend<Ext: Extension<Id>>(&mut self, extension: Ext)
     where
-        Ext::Round: StaticRound<Id, Protocol = EP::Protocol>,
+        Ext::Round: Round<Id, Protocol = EP::Protocol>,
     {
-        let type_id = TypeId::of::<StaticRoundAdapter<Ext::Round>>();
+        let type_id = TypeId::of::<RoundWrapper<Ext::Round>>();
         self.extensions
             .insert(type_id, Box::new(ExtensionWrapper::new(extension)));
     }

@@ -17,16 +17,16 @@ use super::{
     LocalError,
 };
 use crate::{
-    protocol::{
-        Artifact, BoxedFormat, BoxedRound, CommunicationInfo, DirectMessage, EchoBroadcast, EchoRoundParticipation,
-        FinalizeOutcome, MessageValidationError, NormalBroadcast, Payload, Protocol, ProtocolMessage,
-        ProtocolMessagePart, ReceiveError, Round, TransitionInfo,
+    dyn_protocol::{
+        Artifact, BoxedFinalizeOutcome, BoxedFormat, BoxedReceiveError, BoxedRound, DirectMessage, DynRound,
+        EchoBroadcast, NormalBroadcast, Payload, ProtocolMessage, ProtocolMessagePart,
     },
+    protocol::{CommunicationInfo, EchoRoundParticipation, EvidenceError, Protocol, RemoteError, TransitionInfo},
     utils::SerializableMap,
 };
 
 /// An error that can occur on receiving a message during an echo round.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub(crate) enum EchoRoundError<Id> {
     /// The node who constructed the echoed message pack included an invalid message in it.
     ///
@@ -111,12 +111,12 @@ where
 
     // Since the echo round doesn't have its own `Protocol`, these methods live here.
 
-    pub fn verify_direct_message_is_invalid(message: &DirectMessage) -> Result<(), MessageValidationError> {
+    pub fn verify_direct_message_is_invalid(message: &DirectMessage) -> Result<(), EvidenceError> {
         // We don't send any direct messages in the echo round
         message.verify_is_some()
     }
 
-    pub fn verify_echo_broadcast_is_invalid(message: &EchoBroadcast) -> Result<(), MessageValidationError> {
+    pub fn verify_echo_broadcast_is_invalid(message: &EchoBroadcast) -> Result<(), EvidenceError> {
         // We don't send any echo broadcasts in the echo round
         message.verify_is_some()
     }
@@ -124,12 +124,12 @@ where
     pub fn verify_normal_broadcast_is_invalid(
         format: &BoxedFormat,
         message: &NormalBroadcast,
-    ) -> Result<(), MessageValidationError> {
+    ) -> Result<(), EvidenceError> {
         message.verify_is_not::<EchoRoundMessage<SP>>(format)
     }
 }
 
-impl<P, SP> Round<SP::Verifier> for EchoRound<P, SP>
+impl<P, SP> DynRound<SP::Verifier> for EchoRound<P, SP>
 where
     P: Protocol<SP::Verifier>,
     SP: SessionParameters,
@@ -183,7 +183,7 @@ where
         format: &BoxedFormat,
         from: &SP::Verifier,
         message: ProtocolMessage,
-    ) -> Result<Payload, ReceiveError<SP::Verifier, Self::Protocol>> {
+    ) -> Result<Payload, BoxedReceiveError<SP::Verifier>> {
         debug!("{:?}: received an echo message from {:?}", self.verifier, from);
 
         message.echo_broadcast.assert_is_none()?;
@@ -203,18 +203,18 @@ where
 
         let missing_keys = expected_keys.difference(&message_keys).collect::<Vec<_>>();
         if !missing_keys.is_empty() {
-            return Err(ReceiveError::unprovable(format!(
+            return Err(BoxedReceiveError::Unprovable(RemoteError::new(format!(
                 "Missing echoed messages from: {:?}",
                 missing_keys
-            )));
+            ))));
         }
 
         let extra_keys = message_keys.difference(&expected_keys).collect::<Vec<_>>();
         if !extra_keys.is_empty() {
-            return Err(ReceiveError::unprovable(format!(
+            return Err(BoxedReceiveError::Unprovable(RemoteError::new(format!(
                 "Unexpected echoed messages from: {:?}",
                 extra_keys
-            )));
+            ))));
         }
 
         // Check that every entry is equal to what we received previously (in the main round).
@@ -236,29 +236,36 @@ where
                 // This means `from` sent us an incorrectly signed message.
                 // Provable fault of `from`.
                 Err(MessageVerificationError::InvalidSignature) => {
-                    return Err(EchoRoundError::InvalidEcho(sender.clone()).into())
+                    return Err(BoxedReceiveError::Echo(Box::new(EchoRoundError::InvalidEcho(
+                        sender.clone(),
+                    ))))
                 }
                 Err(MessageVerificationError::SignatureMismatch) => {
-                    return Err(EchoRoundError::InvalidEcho(sender.clone()).into())
+                    return Err(BoxedReceiveError::Echo(Box::new(EchoRoundError::InvalidEcho(
+                        sender.clone(),
+                    ))))
                 }
             };
 
             // `from` sent us a correctly signed message but from another round or another session.
             // Provable fault of `from`.
             if verified_echo.metadata() != previously_received_echo.metadata() {
-                return Err(EchoRoundError::InvalidEcho(sender.clone()).into());
+                return Err(BoxedReceiveError::Echo(Box::new(EchoRoundError::InvalidEcho(
+                    sender.clone(),
+                ))));
             }
 
             // `sender` sent us and `from` messages with different payloads,
             // but with correct signatures and the same metadata.
             // Provable fault of `sender`.
             if !verified_echo.is_hash_of::<SP, _>(previously_received_echo) {
-                return Err(EchoRoundError::MismatchedBroadcasts {
-                    guilty_party: sender.clone(),
-                    we_received: previously_received_echo.clone(),
-                    echoed_to_us: echo.clone(),
-                }
-                .into());
+                return Err(BoxedReceiveError::Echo(Box::new(
+                    EchoRoundError::MismatchedBroadcasts {
+                        guilty_party: sender.clone(),
+                        we_received: previously_received_echo.clone(),
+                        echoed_to_us: echo.clone(),
+                    },
+                )));
             }
         }
 
@@ -270,7 +277,7 @@ where
         rng: &mut dyn CryptoRngCore,
         _payloads: BTreeMap<SP::Verifier, Payload>,
         _artifacts: BTreeMap<SP::Verifier, Artifact>,
-    ) -> Result<FinalizeOutcome<SP::Verifier, Self::Protocol>, LocalError> {
+    ) -> Result<BoxedFinalizeOutcome<SP::Verifier, Self::Protocol>, LocalError> {
         self.main_round
             .into_boxed()
             .finalize(rng, self.payloads, self.artifacts)

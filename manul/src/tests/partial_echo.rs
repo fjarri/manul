@@ -11,9 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     dev::{run_sync, BinaryFormat, TestSessionParams, TestSigner, TestVerifier},
     protocol::{
-        BoxedRound, BoxedRoundInfo, CommunicationInfo, EchoRoundParticipation, EntryPoint, FinalizeOutcome, LocalError,
-        NoMessage, NoProtocolErrors, NoProvableErrors, PartyId, Protocol, ReceiveError, RoundId, StaticProtocolMessage,
-        StaticRound, TransitionInfo,
+        BoxedRound, CommunicationInfo, EchoRoundParticipation, EntryPoint, FinalizeOutcome, LocalError, MessageParts,
+        NoMessage, NoProvableErrors, PartyId, Protocol, ReceiveError, Round, RoundId, RoundInfo, TransitionInfo,
     },
     signature::Keypair,
 };
@@ -24,11 +23,10 @@ struct PartialEchoProtocol<Id>(PhantomData<Id>);
 impl<Id: PartyId> Protocol<Id> for PartialEchoProtocol<Id> {
     type Result = ();
     type SharedData = ();
-    type ProtocolError = NoProtocolErrors;
 
-    fn round_info(round_id: &RoundId) -> Option<BoxedRoundInfo<Id, Self>> {
+    fn round_info(round_id: &RoundId) -> Option<RoundInfo<Id, Self>> {
         match round_id {
-            round_id if round_id == &RoundId::new(1) => Some(BoxedRoundInfo::new::<Round1<Id>>()),
+            round_id if round_id == &RoundId::new(1) => Some(RoundInfo::new::<Round1<Id>>()),
             _ => None,
         }
     }
@@ -65,11 +63,11 @@ impl<Id: PartyId + Serialize + for<'de> Deserialize<'de>> EntryPoint<Id> for Inp
         _shared_randomness: &[u8],
         _id: &Id,
     ) -> Result<BoxedRound<Id, Self::Protocol>, LocalError> {
-        Ok(BoxedRound::new_static(Round1 { inputs: self }))
+        Ok(BoxedRound::new(Round1 { inputs: self }))
     }
 }
 
-impl<Id: PartyId + Serialize + for<'de> Deserialize<'de>> StaticRound<Id> for Round1<Id> {
+impl<Id: PartyId + Serialize + for<'de> Deserialize<'de>> Round<Id> for Round1<Id> {
     type Protocol = PartialEchoProtocol<Id>;
     type ProvableError = NoProvableErrors<Self>;
 
@@ -105,8 +103,8 @@ impl<Id: PartyId + Serialize + for<'de> Deserialize<'de>> StaticRound<Id> for Ro
     fn receive_message(
         &self,
         from: &Id,
-        message: StaticProtocolMessage<Id, Self>,
-    ) -> Result<Self::Payload, ReceiveError<Id, Self::Protocol>> {
+        message: MessageParts<Id, Self>,
+    ) -> Result<Self::Payload, ReceiveError<Id, Self>> {
         if self.inputs.expecting_messages_from.is_empty() {
             panic!("Message received when none was expected, this would be a provable offense");
         } else {

@@ -55,9 +55,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use manul::{
     dev::{run_sync, BinaryFormat, TestHasher, TestSignature, TestSigner, TestVerifier},
     protocol::{
-        BoxedRound, BoxedRoundInfo, CommunicationInfo, EchoRoundParticipation, EntryPoint, FinalizeOutcome, LocalError,
-        NoMessage, NoProtocolErrors, NoProvableErrors, Protocol, ReceiveError, RoundId, StaticProtocolMessage,
-        StaticRound, TransitionInfo,
+        BoxedRound, CommunicationInfo, EchoRoundParticipation, EntryPoint, FinalizeOutcome, LocalError, MessageParts,
+        NoMessage, NoProvableErrors, Protocol, ReceiveError, Round, RoundId, RoundInfo, TransitionInfo,
     },
     session::SessionParameters,
 };
@@ -79,12 +78,10 @@ impl Protocol<DinerId> for DiningCryptographersProtocol {
     type Result = (bool, bool, bool);
     type SharedData = ();
 
-    type ProtocolError = NoProtocolErrors;
-
-    fn round_info(round_id: &RoundId) -> Option<BoxedRoundInfo<DinerId, Self>> {
+    fn round_info(round_id: &RoundId) -> Option<RoundInfo<DinerId, Self>> {
         match round_id {
-            _ if round_id == 1 => Some(BoxedRoundInfo::new::<Round1>()),
-            _ if round_id == 2 => Some(BoxedRoundInfo::new::<Round2>()),
+            _ if round_id == 1 => Some(RoundInfo::new::<Round1>()),
+            _ if round_id == 2 => Some(RoundInfo::new::<Round2>()),
             _ => None,
         }
     }
@@ -108,7 +105,7 @@ pub struct Round2 {
     paid: bool,
 }
 
-impl StaticRound<DinerId> for Round1 {
+impl Round<DinerId> for Round1 {
     type Protocol = DiningCryptographersProtocol;
     type ProvableError = NoProvableErrors<Self>;
 
@@ -164,8 +161,8 @@ impl StaticRound<DinerId> for Round1 {
     fn receive_message(
         &self,
         from: &DinerId,
-        message: StaticProtocolMessage<DinerId, Self>,
-    ) -> Result<Self::Payload, ReceiveError<DinerId, Self::Protocol>> {
+        message: MessageParts<DinerId, Self>,
+    ) -> Result<Self::Payload, ReceiveError<DinerId, Self>> {
         let dm = message.direct_message;
         debug!(
             "[Round1, receive_message] {:?} was dm'd by {from:?}: {dm:?}",
@@ -192,7 +189,7 @@ impl StaticRound<DinerId> for Round1 {
             "[Round1, finalize] {:?} is finalizing to Round 2. Own cointoss: {}, neighbour cointoss: {neighbour_toss}",
             self.diner_id, self.own_toss
         );
-        Ok(FinalizeOutcome::AnotherRound(BoxedRound::new_static(Round2 {
+        Ok(FinalizeOutcome::AnotherRound(BoxedRound::new(Round2 {
             diner_id: self.diner_id,
             own_toss: self.own_toss,
             neighbour_toss,
@@ -201,7 +198,7 @@ impl StaticRound<DinerId> for Round1 {
     }
 }
 
-impl StaticRound<DinerId> for Round2 {
+impl Round<DinerId> for Round2 {
     type Protocol = DiningCryptographersProtocol;
     type ProvableError = NoProvableErrors<Self>;
 
@@ -261,8 +258,8 @@ impl StaticRound<DinerId> for Round2 {
     fn receive_message(
         &self,
         from: &DinerId,
-        message: StaticProtocolMessage<DinerId, Self>,
-    ) -> Result<Self::Payload, ReceiveError<DinerId, Self::Protocol>> {
+        message: MessageParts<DinerId, Self>,
+    ) -> Result<Self::Payload, ReceiveError<DinerId, Self>> {
         debug!("[Round2, receive_message] from {from:?} to {:?}", self.diner_id);
         let bcast = message.normal_broadcast;
         trace!("[Round2, receive_message] message (deserialized bcast): {:?}", bcast);
@@ -336,7 +333,7 @@ impl EntryPoint<DinerId> for DiningEntryPoint {
             "[DiningEntryPoint, make_round] diner {id:?} tossed: {:?} (paid? {paid})",
             round.own_toss
         );
-        let round = BoxedRound::new_static(round);
+        let round = BoxedRound::new(round);
         Ok(round)
     }
 }

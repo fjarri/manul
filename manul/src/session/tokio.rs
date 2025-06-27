@@ -198,7 +198,6 @@ where
     P: Protocol<SP::Verifier>,
     SP: SessionParameters,
     <SP as SessionParameters>::Signer: Send + Sync,
-    <P as Protocol<SP::Verifier>>::ProtocolError: Send + Sync,
 {
     let mut session = Arc::new(session);
     // Some rounds can finalize early and put off sending messages to the next round. Such messages
@@ -221,7 +220,7 @@ where
     loop {
         debug!("{my_id}: *** starting round {:?} ***", session.round_id());
 
-        let (processed_tx, mut processed_rx) = mpsc::channel::<ProcessedMessage<P, SP>>(100);
+        let (processed_tx, mut processed_rx) = mpsc::channel::<ProcessedMessage<SP>>(100);
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<(MessageOut<SP>, ProcessedArtifact<SP>)>(100);
 
         // This is kept in the main task since it's mutable,

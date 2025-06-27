@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 use manul::{
     combinators::extend::{Extendable, Extension},
     dev::{run_sync, BinaryFormat, TestSessionParams, TestSigner, TestVerifier},
-    protocol::{LocalError, PartyId, StaticRound},
+    protocol::{LocalError, PartyId, Round},
     signature::Keypair,
 };
 use rand_core::{CryptoRngCore, OsRng};
@@ -29,8 +29,8 @@ where
         _destination: &Id,
     ) -> Result<
         Option<(
-            <Self::Round as StaticRound<Id>>::DirectMessage,
-            <Self::Round as StaticRound<Id>>::Artifact,
+            <Self::Round as Round<Id>>::DirectMessage,
+            <Self::Round as Round<Id>>::Artifact,
         )>,
         LocalError,
     > {
@@ -98,8 +98,8 @@ where
         _destination: &Id,
     ) -> Result<
         Option<(
-            <Self::Round as StaticRound<Id>>::DirectMessage,
-            <Self::Round as StaticRound<Id>>::Artifact,
+            <Self::Round as Round<Id>>::DirectMessage,
+            <Self::Round as Round<Id>>::Artifact,
         )>,
         LocalError,
     > {
